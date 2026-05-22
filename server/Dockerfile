@@ -1,10 +1,7 @@
 FROM ghcr.io/mlflow/mlflow:latest
 
-# Install dependencies required for GCP integration and PostgreSQL
-RUN pip install --no-cache-dir \
-    psycopg2-binary \
-    google-cloud-storage \
-    gunicorn
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt
 
 # Copy and setup entrypoint script
 COPY entrypoint.sh /entrypoint.sh

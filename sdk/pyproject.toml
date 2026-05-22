@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "light-mlflow"
+version = "0.1.0"
+description = "SDK Padronizado da Light para Observabilidade e Model Registry no MLflow"
+authors = [
+    {name = "Equipe de IA - Light"}
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "mlflow>=2.18.0",
+    "google-cloud-storage>=2.13.0"
+]
+
+[project.optional-dependencies]
+plots = ["matplotlib>=3.7.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["light_mlflow*"]
