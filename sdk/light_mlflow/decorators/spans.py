@@ -2,11 +2,19 @@ import functools
 import mlflow
 import inspect
 import logging
+import json
 from typing import Optional
 
 logger = logging.getLogger("light_mlflow.spans")
 
-def _extract_and_log_tokens(response):
+def _safe_serialize(obj):
+    """Garante que objetos complexos (bytes, Pydantic, etc) não quebrem o Trace do MLflow."""
+    try:
+        return json.loads(json.dumps(obj, default=str))
+    except Exception:
+        return str(obj)
+
+def _extract_and_log_tokens(response, span=None):
     """Extrai silenciosamente a contagem de tokens de respostas do Gemini/OpenAI e envia para o MLflow."""
     try:
         # Extração para SDK nativo do Google Gemini (usage_metadata)
@@ -20,6 +28,12 @@ def _extract_and_log_tokens(response):
             mlflow.log_metric("llm.usage.completion_tokens", c_tokens)
             mlflow.log_metric("llm.usage.total_tokens", t_tokens)
             
+            # Adiciona no Span para aparecer na UI do Trace
+            if span:
+                span.set_attribute("llm.usage.prompt_tokens", p_tokens)
+                span.set_attribute("llm.usage.completion_tokens", c_tokens)
+                span.set_attribute("llm.usage.total_tokens", t_tokens)
+            
         # Extração para SDK nativo da OpenAI (usage)
         elif hasattr(response, "usage") and response.usage is not None:
             usage = response.usage
@@ -31,6 +45,11 @@ def _extract_and_log_tokens(response):
             mlflow.log_metric("llm.usage.completion_tokens", c_tokens)
             mlflow.log_metric("llm.usage.total_tokens", t_tokens)
             
+            if span:
+                span.set_attribute("llm.usage.prompt_tokens", p_tokens)
+                span.set_attribute("llm.usage.completion_tokens", c_tokens)
+                span.set_attribute("llm.usage.total_tokens", t_tokens)
+            
     except Exception as e:
         logger.warning(f"Aviso: Falha ao extrair métricas de tokens da resposta LLM. Erro: {e}")
 
@@ -38,9 +57,33 @@ def _trace_with_type(span_type: str, name: Optional[str] = None):
     """Factory interno para gerar decorators baseados no tipo do span."""
     def decorator(func):
         span_name = name or func.__name__
-        # Utilizamos o mlflow.trace nativo do MLflow
-        # Ele cuida magicamente de encadear spans (pai/filho) baseado na pilha de execução do Python.
-        return mlflow.trace(name=span_name, span_type=span_type)(func)
+        
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with mlflow.start_span(name=span_name, span_type=span_type) as span:
+                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                    try:
+                        res = await func(*args, **kwargs)
+                        span.set_outputs(_safe_serialize(res))
+                        return res
+                    except Exception as e:
+                        span.set_status("ERROR")
+                        raise e
+            return async_wrapper
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                with mlflow.start_span(name=span_name, span_type=span_type) as span:
+                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                    try:
+                        res = func(*args, **kwargs)
+                        span.set_outputs(_safe_serialize(res))
+                        return res
+                    except Exception as e:
+                        span.set_status("ERROR")
+                        raise e
+            return sync_wrapper
     return decorator
 
 # ==============================================================================
@@ -48,55 +91,54 @@ def _trace_with_type(span_type: str, name: Optional[str] = None):
 # ==============================================================================
 
 def retriever_span(name: Optional[str] = None):
-    """
-    Rastreia a busca de documentos de contexto.
-    Ex: Uma função que faz busca em um banco vetorial ou no Elasticsearch.
-    """
+    """Rastreia a busca de documentos de contexto."""
     return _trace_with_type("RETRIEVER", name)
 
 def chain_span(name: Optional[str] = None):
-    """
-    Rastreia uma cadeia sequencial de operações (como RAG chain, Chain of Thought).
-    """
+    """Rastreia uma cadeia sequencial de operações."""
     return _trace_with_type("CHAIN", name)
 
 def agent_span(name: Optional[str] = None):
-    """
-    Rastreia o raciocínio de um Agente Autônomo.
-    Engloba as decisões sobre quais ferramentas chamar baseado na resposta da LLM.
-    """
+    """Rastreia o raciocínio de um Agente Autônomo."""
     return _trace_with_type("AGENT", name)
 
 def tool_span(name: Optional[str] = None):
-    """
-    Rastreia a execução de uma ferramenta/tool disparada por um Agente.
-    Ex: 'Consultar banco SQL', 'Buscar clima na web'.
-    """
+    """Rastreia a execução de uma ferramenta disparada por um Agente."""
     return _trace_with_type("TOOL", name)
 
 def llm_span(name: Optional[str] = None):
-    """
-    Rastreia uma chamada a LLM (Gemini, OpenAI) como um passo de um processo maior.
-    Extrai magicamente os gastos de Tokens (se a função retornar o objeto nativo)
-    e envia para o painel 'Metrics' do MLflow.
-    """
+    """Rastreia uma chamada a LLM e extrai os gastos de Tokens."""
     def decorator(func):
         span_name = name or func.__name__
         
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                response = await func(*args, **kwargs)
-                _extract_and_log_tokens(response)
-                return response
-            return mlflow.trace(name=span_name, span_type="LLM")(async_wrapper)
+                with mlflow.start_span(name=span_name, span_type="LLM") as span:
+                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                    try:
+                        response = await func(*args, **kwargs)
+                        span.set_outputs(_safe_serialize(response))
+                        _extract_and_log_tokens(response, span)
+                        return response
+                    except Exception as e:
+                        span.set_status("ERROR")
+                        raise e
+            return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                response = func(*args, **kwargs)
-                _extract_and_log_tokens(response)
-                return response
-            return mlflow.trace(name=span_name, span_type="LLM")(sync_wrapper)
+                with mlflow.start_span(name=span_name, span_type="LLM") as span:
+                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                    try:
+                        response = func(*args, **kwargs)
+                        span.set_outputs(_safe_serialize(response))
+                        _extract_and_log_tokens(response, span)
+                        return response
+                    except Exception as e:
+                        span.set_status("ERROR")
+                        raise e
+            return sync_wrapper
             
     return decorator
 
@@ -105,22 +147,34 @@ def llm_span(name: Optional[str] = None):
 # ==============================================================================
 
 def track_pipeline(run_name: str = "pipeline_execution"):
-    """
-    Decorator de alto nível para a função principal do seu software de IA.
-    Ele cria o "Run" no MLflow e, ao mesmo tempo, cria o Span Raiz (CHAIN) que
-    vai abraçar todos os outros Spans (Retriever, LLM, Agent) acionados abaixo dele.
-    """
+    """Decorator de alto nível para a função principal. Inicia o Run e o Span raiz."""
     def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # 1. Inicia o Run (O agrupador master que vai aparecer na tela inicial do MLflow)
-            with mlflow.start_run(run_name=run_name):
-                
-                # 2. Transforma a função executada no nó principal da árvore de Spans
-                @mlflow.trace(name=func.__name__, span_type="CHAIN")
-                def inner_execute():
-                    return func(*args, **kwargs)
-                
-                return inner_execute()
-        return wrapper
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                with mlflow.start_run(run_name=run_name):
+                    with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
+                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                        try:
+                            res = await func(*args, **kwargs)
+                            span.set_outputs(_safe_serialize(res))
+                            return res
+                        except Exception as e:
+                            span.set_status("ERROR")
+                            raise e
+            return async_wrapper
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                with mlflow.start_run(run_name=run_name):
+                    with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
+                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                        try:
+                            res = func(*args, **kwargs)
+                            span.set_outputs(_safe_serialize(res))
+                            return res
+                        except Exception as e:
+                            span.set_status("ERROR")
+                            raise e
+            return sync_wrapper
     return decorator
