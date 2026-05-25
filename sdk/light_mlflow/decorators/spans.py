@@ -8,10 +8,33 @@ from typing import Optional
 logger = logging.getLogger("light_mlflow.spans")
 
 def _safe_serialize(obj):
-    """Garante que objetos complexos (bytes, Pydantic, etc) não quebrem o Trace do MLflow."""
+    """Garante que objetos complexos (bytes, Pydantic, etc) não quebrem o Trace do MLflow, transformando-os em dicionários navegáveis."""
+    if isinstance(obj, dict):
+        return {k: _safe_serialize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_safe_serialize(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_safe_serialize(v) for v in obj)
+        
+    # Tratamento para Pydantic / Google GenAI SDK
+    if hasattr(obj, "model_dump"):
+        try:
+            return _safe_serialize(obj.model_dump())
+        except Exception:
+            pass
+    elif hasattr(obj, "dict"):
+        try:
+            return _safe_serialize(obj.dict())
+        except Exception:
+            pass
+            
+    if isinstance(obj, bytes):
+        return "<bytes_data>"
+        
     try:
-        return json.loads(json.dumps(obj, default=str))
-    except Exception:
+        json.dumps(obj)
+        return obj
+    except TypeError:
         return str(obj)
 
 def _extract_and_log_tokens(response, span=None):
