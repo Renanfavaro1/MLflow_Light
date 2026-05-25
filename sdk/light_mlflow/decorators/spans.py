@@ -129,6 +129,67 @@ def tool_span(name: Optional[str] = None):
     """Rastreia a execução de uma ferramenta disparada por um Agente."""
     return _trace_with_type("TOOL", name)
 
+def _normalize_llm_span_data(args, kwargs, response):
+    """
+    Tenta normalizar os inputs/outputs do Google GenAI para o formato padrão do MLflow/OpenAI,
+    permitindo que a UI de Traces renderize as ferramentas (tool calling) e chats perfeitamente.
+    """
+    normalized_inputs = {"messages": []}
+    normalized_outputs = {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": []}}]}
+    
+    try:
+        # Processa Inputs
+        contents = kwargs.get("contents") or (args[0] if len(args) > 0 else None)
+        if isinstance(contents, list):
+            for c in contents:
+                role = getattr(c, "role", "user")
+                # Mapeia role 'model' para 'assistant' (padrão OpenAI)
+                if role == "model": role = "assistant"
+                
+                text_content = ""
+                parts = getattr(c, "parts", [])
+                for p in parts:
+                    if hasattr(p, "text") and p.text:
+                        text_content += p.text
+                    elif hasattr(p, "function_response") and p.function_response:
+                        text_content += f"\n[Function Response: {getattr(p.function_response, 'name', '')} -> {getattr(p.function_response, 'response', {})}]"
+                
+                normalized_inputs["messages"].append({"role": role, "content": text_content.strip()})
+        else:
+            return None, None
+            
+        # Processa Outputs
+        if hasattr(response, "candidates") and response.candidates:
+            cand = response.candidates[0]
+            if hasattr(cand, "content") and cand.content:
+                out_text = ""
+                tool_calls = []
+                parts = getattr(cand.content, "parts", [])
+                for p in parts:
+                    if hasattr(p, "text") and p.text:
+                        out_text += p.text
+                    elif hasattr(p, "function_call") and p.function_call:
+                        fc = p.function_call
+                        args_str = json.dumps(dict(fc.args)) if hasattr(fc, "args") and fc.args else "{}"
+                        tool_calls.append({
+                            "type": "function",
+                            "function": {
+                                "name": fc.name,
+                                "arguments": args_str
+                            }
+                        })
+                normalized_outputs["choices"][0]["message"]["content"] = out_text.strip()
+                if tool_calls:
+                    normalized_outputs["choices"][0]["message"]["tool_calls"] = tool_calls
+            else:
+                return None, None
+        else:
+            return None, None
+            
+        return normalized_inputs, normalized_outputs
+    except Exception:
+        return None, None
+
 def llm_span(name: Optional[str] = None):
     """Rastreia uma chamada a LLM e extrai os gastos de Tokens."""
     def decorator(func):
@@ -138,13 +199,21 @@ def llm_span(name: Optional[str] = None):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 with mlflow.start_span(name=span_name, span_type="LLM") as span:
-                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                     try:
                         response = await func(*args, **kwargs)
-                        span.set_outputs(_safe_serialize(response))
+                        
+                        norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
+                        if norm_in and norm_out:
+                            span.set_inputs(norm_in)
+                            span.set_outputs(norm_out)
+                        else:
+                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                            span.set_outputs(_safe_serialize(response))
+                            
                         _extract_and_log_tokens(response, span)
                         return response
                     except Exception as e:
+                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                         span.set_status("ERROR")
                         raise e
             return async_wrapper
@@ -152,13 +221,21 @@ def llm_span(name: Optional[str] = None):
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
                 with mlflow.start_span(name=span_name, span_type="LLM") as span:
-                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                     try:
                         response = func(*args, **kwargs)
-                        span.set_outputs(_safe_serialize(response))
+                        
+                        norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
+                        if norm_in and norm_out:
+                            span.set_inputs(norm_in)
+                            span.set_outputs(norm_out)
+                        else:
+                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                            span.set_outputs(_safe_serialize(response))
+                            
                         _extract_and_log_tokens(response, span)
                         return response
                     except Exception as e:
+                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                         span.set_status("ERROR")
                         raise e
             return sync_wrapper
