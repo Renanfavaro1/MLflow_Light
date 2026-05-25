@@ -1,6 +1,11 @@
 import os
 import mlflow
 import logging
+import warnings
+import urllib3
+
+# Suprime os avisos de conexão insegura gerados pelo proxy corporativo
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("light_mlflow")
