@@ -62,3 +62,39 @@ def processar_mensagem(pergunta, cpf):
 - **Não misturar abordagens**: NUNCA utilize o antigo `@track_llm_call` em projetos com Agentes, pois ele não gera a árvore hierárquica na aba Traces.
 - **Evite hardcode de URLs**: Nunca defina a `tracking_uri` manualmente no código. Deixe o SDK ler da variável de ambiente gerenciada pelo Terraform/Cloud Run.
 - **Segurança de SSL**: Em caso de avisos de `InsecureRequestWarning` devido à rede interna da Light, não desative os warnings no código do agente (deixe isso para a camada de infra/Docker se necessário, ou garanta que o CA corporativo esteja instalado).
+
+---
+
+## 🟢 4. Integração Node.js / TypeScript (Apenas Backend)
+Se o projeto de destino for em Node.js (ex: Express, NestJS, Vite SSR), o MLflow deve ser integrado usando o pacote NPM centralizado da Light. O SDK Javascript utiliza *Wrappers* e *AsyncLocalStorage* em vez de decoradores.
+
+### Instalação (package.json):
+```json
+"dependencies": {
+  "light-mlflow-node": "git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk-node"
+}
+```
+
+### Configuração Inicial (Index.js / Main.js)
+```javascript
+import { LightMLflowConfig } from 'light-mlflow-node';
+// A URI é lida automaticamente do process.env.MLFLOW_TRACKING_URI
+await LightMLflowConfig.setup("Nome_do_Projeto_Node");
+```
+
+### Rastreamento de LLMs em Node.js
+Use as funções `trackPipeline` e `llmSpan` para englobar a lógica. A extração de tokens é automática se a função retornar objetos da OpenAI ou `@google/genai` (Node.js).
+
+```javascript
+import { trackPipeline, llmSpan } from 'light-mlflow-node';
+
+const minhaChamadaGemini = llmSpan("Gemini_Resumo", async (texto) => {
+    // Integração com o SDK do Google
+    return response; 
+});
+
+const processarChamada = trackPipeline("Atendimento_Node", async (req) => {
+    const dados = await minhaChamadaGemini(req.body.pergunta);
+    return dados;
+});
+```

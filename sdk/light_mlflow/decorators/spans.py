@@ -186,6 +186,18 @@ def _normalize_llm_span_data(args, kwargs, response):
         else:
             return None, None
             
+        # Tenta extrair Tokens para a raiz do output (padrão que a UI do MLflow lê nativamente)
+        try:
+            if hasattr(response, "usage_metadata") and response.usage_metadata is not None:
+                usg = response.usage_metadata
+                normalized_outputs["usage"] = {
+                    "prompt_tokens": getattr(usg, "prompt_token_count", 0),
+                    "completion_tokens": getattr(usg, "candidates_token_count", 0),
+                    "total_tokens": getattr(usg, "total_token_count", 0)
+                }
+        except Exception:
+            pass
+
         return normalized_inputs, normalized_outputs
     except Exception:
         return None, None
