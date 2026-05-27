@@ -3,4 +3,5 @@ flask-wtf>=1.2.1
 psycopg2-binary>=2.9.9
 google-cloud-storage>=2.13.0
 gunicorn>=21.2.0
+uvicorn>=0.20.0
 

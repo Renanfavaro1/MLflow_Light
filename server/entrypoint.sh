@@ -24,4 +24,4 @@ mlflow server \
     --backend-store-uri "${BACKEND_STORE_URI}" \
     --default-artifact-root "${DEFAULT_ARTIFACT_ROOT}" \
     --workers ${MLFLOW_WORKERS:-2} \
-    --gunicorn-opts "--timeout 120 --forwarded-allow-ips=*"
+    --uvicorn-opts "--timeout-keep-alive 120"
