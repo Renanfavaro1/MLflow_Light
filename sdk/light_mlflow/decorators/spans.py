@@ -37,16 +37,49 @@ def _safe_serialize(obj):
     except TypeError:
         return str(obj)
 
+MODEL_PRICES = {
+    'gemini-2.5-flash': {'input': 0.075, 'output': 0.30},
+    'gemini-2.5-pro': {'input': 1.25, 'output': 5.00},
+    'gemini-1.5-flash': {'input': 0.075, 'output': 0.30},
+    'gemini-1.5-pro': {'input': 1.25, 'output': 5.00},
+    'gemini-1.0-pro': {'input': 0.50, 'output': 1.50},
+    'gpt-4o': {'input': 2.50, 'output': 10.00},
+    'gpt-4o-mini': {'input': 0.15, 'output': 0.60},
+    'default': {'input': 0.075, 'output': 0.30}
+}
+
+def _get_prices_for_model(model_name: Optional[str]) -> dict:
+    if not model_name or not isinstance(model_name, str):
+        return MODEL_PRICES['default']
+    lower_name = model_name.lower()
+    for key, prices in MODEL_PRICES.items():
+        if key != 'default' and key in lower_name:
+            return prices
+    return MODEL_PRICES['default']
+
 def _extract_and_log_tokens(response, span=None):
-    """Extrai silenciosamente a contagem de tokens de respostas do Gemini/OpenAI e envia para o MLflow."""
+    """Extrai silenciosamente a contagem de tokens de respostas do Gemini/OpenAI, calcula custos e envia para o MLflow."""
     try:
+        p_tokens, c_tokens, t_tokens = 0, 0, 0
+        has_tokens = False
+
         # Extração para SDK nativo do Google Gemini (usage_metadata)
         if hasattr(response, "usage_metadata") and response.usage_metadata is not None:
             usage = response.usage_metadata
             p_tokens = getattr(usage, "prompt_token_count", 0)
             c_tokens = getattr(usage, "candidates_token_count", 0)
             t_tokens = getattr(usage, "total_token_count", p_tokens + c_tokens)
+            has_tokens = True
             
+        # Extração para SDK nativo da OpenAI (usage)
+        elif hasattr(response, "usage") and response.usage is not None:
+            usage = response.usage
+            p_tokens = getattr(usage, "prompt_tokens", 0)
+            c_tokens = getattr(usage, "completion_tokens", 0)
+            t_tokens = getattr(usage, "total_tokens", p_tokens + c_tokens)
+            has_tokens = True
+
+        if has_tokens and t_tokens > 0:
             mlflow.log_metric("llm.usage.prompt_tokens", p_tokens)
             mlflow.log_metric("llm.usage.completion_tokens", c_tokens)
             mlflow.log_metric("llm.usage.total_tokens", t_tokens)
@@ -56,22 +89,28 @@ def _extract_and_log_tokens(response, span=None):
                 span.set_attribute("llm.usage.prompt_tokens", p_tokens)
                 span.set_attribute("llm.usage.completion_tokens", c_tokens)
                 span.set_attribute("llm.usage.total_tokens", t_tokens)
-            
-        # Extração para SDK nativo da OpenAI (usage)
-        elif hasattr(response, "usage") and response.usage is not None:
-            usage = response.usage
-            p_tokens = getattr(usage, "prompt_tokens", 0)
-            c_tokens = getattr(usage, "completion_tokens", 0)
-            t_tokens = getattr(usage, "total_tokens", p_tokens + c_tokens)
-            
-            mlflow.log_metric("llm.usage.prompt_tokens", p_tokens)
-            mlflow.log_metric("llm.usage.completion_tokens", c_tokens)
-            mlflow.log_metric("llm.usage.total_tokens", t_tokens)
-            
+
+            # Extrair nome do modelo e calcular custos
+            model_name = getattr(response, "model", None) or getattr(response, "model_name", None) or 'gemini-2.5-flash'
+            prices = _get_prices_for_model(model_name)
+            input_cost = (p_tokens * prices['input']) / 1000000.0
+            output_cost = (c_tokens * prices['output']) / 1000000.0
+            total_cost = input_cost + output_cost
+
+            mlflow.log_metric("llm.cost.input_cost", input_cost)
+            mlflow.log_metric("llm.cost.output_cost", output_cost)
+            mlflow.log_metric("llm.cost.total_cost", total_cost)
+
             if span:
-                span.set_attribute("llm.usage.prompt_tokens", p_tokens)
-                span.set_attribute("llm.usage.completion_tokens", c_tokens)
-                span.set_attribute("llm.usage.total_tokens", t_tokens)
+                span.set_attribute("mlflow.llm.cost", json.dumps({
+                    "input_cost": input_cost,
+                    "output_cost": output_cost,
+                    "total_cost": total_cost
+                }))
+                span.set_attribute("mlflow.llm.model", model_name)
+                span.set_attribute("mlflow.llm.provider", "google" if "gemini" in model_name.lower() else "openai")
+                span.set_attribute("gen_ai.request.model", model_name)
+                span.set_attribute("gen_ai.response.model", model_name)
             
     except Exception as e:
         logger.warning(f"Aviso: Falha ao extrair métricas de tokens da resposta LLM. Erro: {e}")

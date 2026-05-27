@@ -259,6 +259,10 @@ function _extractAndLogTokens(runId, response, span = null) {
                     output_cost: outputCost,
                     total_cost: totalCost
                 }));
+                span.setAttribute('mlflow.llm.model', modelName);
+                span.setAttribute('mlflow.llm.provider', modelName.includes('gemini') ? 'google' : 'openai');
+                span.setAttribute('gen_ai.request.model', modelName);
+                span.setAttribute('gen_ai.response.model', modelName);
             }
         }
     } catch (e) {
