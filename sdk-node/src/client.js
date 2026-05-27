@@ -40,6 +40,7 @@ class MLflowClient {
     async createRun(experimentId, runName) {
         const res = await this.client.post(`/api/2.0/mlflow/runs/create`, {
             experiment_id: experimentId,
+            start_time: Date.now(),
             tags: [
                 { key: "mlflow.runName", value: runName }
             ]

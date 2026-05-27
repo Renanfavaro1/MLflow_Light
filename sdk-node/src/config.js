@@ -45,6 +45,9 @@ class LightMLflowConfig {
                 headers: {
                     'x-mlflow-experiment-id': String(this.experimentId),
                 },
+                httpAgentOptions: {
+                    rejectUnauthorized: false,
+                },
             });
 
             // Usamos BatchSpanProcessor para performance, mas com flush rápido se necessário
