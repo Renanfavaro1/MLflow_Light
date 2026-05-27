@@ -1,7 +1,7 @@
 import MLflowClient from './client.js';
 import opentelemetry from '@opentelemetry/api';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { Resource } from '@opentelemetry/resources';
 
@@ -30,6 +30,12 @@ class LightMLflowConfig {
             console.log(`✅ MLflow Tracking URI configurado para: ${trackingUri}`);
             console.log(`✅ Experimento ativo: ${experimentName}`);
 
+            // Habilitar logs de diagnóstico internos do OpenTelemetry para capturar erros silenciosos de rede/exportação
+            opentelemetry.diag.setLogger(
+                new opentelemetry.DiagConsoleLogger(),
+                opentelemetry.DiagLogLevel.INFO
+            );
+
             // Configurar OpenTelemetry para Traces
             const cleanUri = trackingUri.endsWith('/') ? trackingUri.slice(0, -1) : trackingUri;
             const otlpUrl = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || `${cleanUri}/v1/traces`;
@@ -50,8 +56,9 @@ class LightMLflowConfig {
                 },
             });
 
-            // Usamos BatchSpanProcessor para performance, mas com flush rápido se necessário
-            provider.addSpanProcessor(new BatchSpanProcessor(exporter));
+            // Usamos SimpleSpanProcessor para flush imediato dos spans no encerramento de cada bloco,
+            // garantindo o envio sem depender de timers ou sofrer com o ciclo de vida do Cloud Run.
+            provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
             provider.register();
 
             this.provider = provider;
