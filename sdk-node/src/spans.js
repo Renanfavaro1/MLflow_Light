@@ -14,12 +14,17 @@ async function _traceWithSpan(spanName, spanType, asyncFunc, args) {
         return await asyncFunc(...args);
     }
 
-    const span = LightMLflowConfig.tracer.startSpan(spanName, {
-        attributes: {
-            'mlflow.run_id': String(runId),
-            'mlflow.spanType': spanType,
-        }
-    });
+    const attributes = {
+        'mlflow.run_id': String(runId),
+        'mlflow.spanType': spanType,
+    };
+    if (spanType === 'TOOL') {
+        attributes['gen_ai.operation.name'] = 'execute_tool';
+    } else if (spanType === 'AGENT') {
+        attributes['gen_ai.operation.name'] = 'invoke_agent';
+    }
+
+    const span = LightMLflowConfig.tracer.startSpan(spanName, { attributes });
 
     const otelCtx = opentelemetry.trace.setSpan(opentelemetry.context.active(), span);
 
@@ -119,6 +124,7 @@ export function llmSpan(spanName, asyncFunc) {
                 attributes: {
                     'mlflow.run_id': String(runId),
                     'mlflow.spanType': 'LLM',
+                    'gen_ai.operation.name': 'generate_content',
                 }
             });
             const otelCtx = opentelemetry.trace.setSpan(opentelemetry.context.active(), span);
@@ -184,6 +190,30 @@ export function agentSpan(spanName, asyncFunc) {
     }
 }
 
+const MODEL_PRICES = {
+    'gemini-2.5-flash': { input: 0.075, output: 0.30 },
+    'gemini-2.5-pro': { input: 1.25, output: 5.00 },
+    'gemini-1.5-flash': { input: 0.075, output: 0.30 },
+    'gemini-1.5-pro': { input: 1.25, output: 5.00 },
+    'gemini-1.0-pro': { input: 0.50, output: 1.50 },
+    'gpt-4o': { input: 2.50, output: 10.00 },
+    'gpt-4o-mini': { input: 0.15, output: 0.60 },
+    'default': { input: 0.075, output: 0.30 }
+};
+
+function _getPricesForModel(modelName) {
+    if (!modelName || typeof modelName !== 'string') {
+        return MODEL_PRICES['default'];
+    }
+    const lowerName = modelName.toLowerCase();
+    for (const [key, prices] of Object.entries(MODEL_PRICES)) {
+        if (key !== 'default' && lowerName.includes(key)) {
+            return prices;
+        }
+    }
+    return MODEL_PRICES['default'];
+}
+
 function _extractAndLogTokens(runId, response, span = null) {
     try {
         let p = 0, c = 0, t = 0;
@@ -210,6 +240,25 @@ function _extractAndLogTokens(runId, response, span = null) {
                 span.setAttribute('llm.usage.prompt_tokens', p);
                 span.setAttribute('llm.usage.completion_tokens', c);
                 span.setAttribute('llm.usage.total_tokens', t);
+            }
+
+            // Cálculo de custo
+            const modelName = response?.model || response?.modelName || 'gemini-2.5-flash';
+            const prices = _getPricesForModel(modelName);
+            const inputCost = (p * prices.input) / 1000000;
+            const outputCost = (c * prices.output) / 1000000;
+            const totalCost = inputCost + outputCost;
+
+            LightMLflowConfig.client.logMetric(runId, "llm.cost.input_cost", inputCost);
+            LightMLflowConfig.client.logMetric(runId, "llm.cost.output_cost", outputCost);
+            LightMLflowConfig.client.logMetric(runId, "llm.cost.total_cost", totalCost);
+
+            if (span) {
+                span.setAttribute('mlflow.llm.cost', JSON.stringify({
+                    input_cost: inputCost,
+                    output_cost: outputCost,
+                    total_cost: totalCost
+                }));
             }
         }
     } catch (e) {
@@ -248,24 +297,37 @@ function _normalizeLlmSpanData(args, response) {
             normalizedInputs.messages.push({ role: 'user', content: contents });
         } else if (Array.isArray(contents)) {
             for (const c of contents) {
-                let role = c.role || 'user';
-                if (role === 'model') role = 'assistant';
+                if (c && typeof c === 'object' && 'content' in c && 'role' in c) {
+                    normalizedInputs.messages.push({
+                        role: c.role,
+                        content: typeof c.content === 'string' ? c.content : JSON.stringify(c.content)
+                    });
+                } else if (c && typeof c === 'object') {
+                    let role = c.role || 'user';
+                    if (role === 'model') role = 'assistant';
 
-                let textContent = '';
-                const parts = c.parts || [];
-                for (const p of parts) {
-                    if (p.text) {
-                        textContent += p.text;
-                    } else if (p.functionResponse) {
-                        textContent += `\n[Function Response: ${p.functionResponse.name} -> ${JSON.stringify(p.functionResponse.response)}]`;
+                    let textContent = '';
+                    const parts = c.parts || [];
+                    for (const p of parts) {
+                        if (p.text) {
+                            textContent += p.text;
+                        } else if (p.functionResponse) {
+                            textContent += `\n[Function Response: ${p.functionResponse.name} -> ${JSON.stringify(p.functionResponse.response)}]`;
+                        }
                     }
+                    normalizedInputs.messages.push({ role, content: textContent.trim() });
                 }
-                normalizedInputs.messages.push({ role, content: textContent.trim() });
             }
         }
 
-        if (response && response.text) {
-            normalizedOutputs.choices[0].message.content = response.text;
+        if (response && response.choices && Array.isArray(response.choices)) {
+            normalizedOutputs.choices = response.choices.map(choice => ({
+                message: {
+                    role: choice.message?.role || 'assistant',
+                    content: choice.message?.content || '',
+                    tool_calls: choice.message?.tool_calls || []
+                }
+            }));
         } else if (response && response.candidates && response.candidates[0]) {
             const cand = response.candidates[0];
             if (cand.content) {
@@ -292,6 +354,8 @@ function _normalizeLlmSpanData(args, response) {
                     normalizedOutputs.choices[0].message.tool_calls = toolCalls;
                 }
             }
+        } else if (response && response.text) {
+            normalizedOutputs.choices[0].message.content = response.text;
         }
 
         if (response && response.usageMetadata) {
@@ -300,6 +364,12 @@ function _normalizeLlmSpanData(args, response) {
                 prompt_tokens: usg.promptTokenCount || 0,
                 completion_tokens: usg.candidatesTokenCount || 0,
                 total_tokens: usg.totalTokenCount || 0
+            };
+        } else if (response && response.usage) {
+            normalizedOutputs.usage = {
+                prompt_tokens: response.usage.prompt_tokens || 0,
+                completion_tokens: response.usage.completion_tokens || 0,
+                total_tokens: response.usage.total_tokens || 0
             };
         }
 
