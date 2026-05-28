@@ -1,9 +1,29 @@
 import MLflowClient from './client.js';
 import opentelemetry from '@opentelemetry/api';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { SimpleSpanProcessor, SamplingDecision } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { Resource } from '@opentelemetry/resources';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+export const runStorage = new AsyncLocalStorage();
+
+class MLflowSampler {
+    shouldSample(context, traceId, spanName, spanKind, attributes, links) {
+        // Se há um runId ativo no local storage (ou seja, dentro de trackPipeline), sampleamos.
+        // Spans gerados por outras bibliotecas (como Firestore/GCS) fora do trackPipeline são descartados.
+        const runId = runStorage.getStore();
+        if (runId) {
+            return { decision: SamplingDecision.RECORD_AND_SAMPLE };
+        }
+        return { decision: SamplingDecision.NOT_RECORD };
+    }
+
+    toString() {
+        return 'MLflowSampler';
+    }
+}
+
 
 class LightMLflowConfig {
     static experimentId = null;
@@ -44,6 +64,7 @@ class LightMLflowConfig {
                 resource: new Resource({
                     'service.name': experimentName,
                 }),
+                sampler: new MLflowSampler(),
             });
 
             const exporter = new OTLPTraceExporter({
