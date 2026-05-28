@@ -38,8 +38,29 @@ def _safe_serialize(obj):
         return str(obj)
 
 MODEL_PRICES = {
-    'gemini-2.5-flash': {'input': 0.075, 'output': 0.30},
-    'gemini-2.5-pro': {'input': 1.25, 'output': 5.00},
+    'claude-opus-4.7': {'input': 4.82, 'output': 23.80},
+    'claude-opus-4.6': {'input': 4.82, 'output': 23.80},
+    'claude-sonnet-4.6': {'input': 2.80, 'output': 14.30},
+    'claude-opus-4.5': {'input': 4.82, 'output': 23.80},
+    'claude-sonnet-4.5': {'input': 2.80, 'output': 14.30},
+    'claude-haiku-4.5': {'input': 0.95, 'output': 4.80},
+    'claude-sonnet-4': {'input': 3.00, 'output': 15.00},
+    'claude-3.5-haiku': {'input': 0.80, 'output': 4.00},
+    'gpt-5.5': {'input': 5.00, 'output': 30.00},
+    'gpt-5.4-pro': {'input': 30.00, 'output': 180.00},
+    'gpt-5.4': {'input': 2.50, 'output': 15.00},
+    'gpt-5.3-codex': {'input': 1.80, 'output': 14.00},
+    'gpt-5.3-chat': {'input': 1.80, 'output': 14.00},
+    'gpt-5.4-nano': {'input': 0.20, 'output': 1.30},
+    'gpt-5.4-mini': {'input': 0.75, 'output': 4.50},
+    'gpt-5.1': {'input': 1.30, 'output': 10.00},
+    'gemini-3.1-pro-preview': {'input': 2.00, 'output': 12.00},
+    'gemini-3.5-flash': {'input': 1.50, 'output': 9.00},
+    'gemini-3.1-flash-lite': {'input': 0.25, 'output': 1.50},
+    'gemini-3.1-flash-lite-preview': {'input': 0.25, 'output': 1.50},
+    'gemini-3-pro-image-preview': {'input': 2.00, 'output': 12.00},
+    'gemini-2.5-flash': {'input': 0.30, 'output': 2.50},
+    'gemini-2.5-pro': {'input': 1.30, 'output': 10.00},
     'gemini-1.5-flash': {'input': 0.075, 'output': 0.30},
     'gemini-1.5-pro': {'input': 1.25, 'output': 5.00},
     'gemini-1.0-pro': {'input': 0.50, 'output': 1.50},
@@ -89,6 +110,11 @@ def _extract_and_log_tokens(response, span=None):
                 span.set_attribute("llm.usage.prompt_tokens", p_tokens)
                 span.set_attribute("llm.usage.completion_tokens", c_tokens)
                 span.set_attribute("llm.usage.total_tokens", t_tokens)
+                
+                # Atributos de convenção semântica padrão da OpenTelemetry GenAI (necessários para a interface moderna do MLflow)
+                span.set_attribute("gen_ai.usage.prompt_tokens", p_tokens)
+                span.set_attribute("gen_ai.usage.completion_tokens", c_tokens)
+                span.set_attribute("gen_ai.usage.total_tokens", t_tokens)
 
             # Extrair nome do modelo e calcular custos
             model_name = getattr(response, "model", None) or getattr(response, "model_name", None) or 'gemini-2.5-flash'
@@ -108,7 +134,7 @@ def _extract_and_log_tokens(response, span=None):
                     "total_cost": total_cost
                 }))
                 span.set_attribute("mlflow.llm.model", model_name)
-                span.set_attribute("mlflow.llm.provider", "google" if "gemini" in model_name.lower() else "openai")
+                span.set_attribute("mlflow.llm.provider", "google" if "gemini" in model_name.lower() else ("anthropic" if "claude" in model_name.lower() else "openai"))
                 span.set_attribute("gen_ai.request.model", model_name)
                 span.set_attribute("gen_ai.response.model", model_name)
             
@@ -168,21 +194,44 @@ def tool_span(name: Optional[str] = None):
     """Rastreia a execução de uma ferramenta disparada por um Agente."""
     return _trace_with_type("TOOL", name)
 
+def _get_contents_from_args_kwargs(args, kwargs):
+    # 1. Verifica se 'contents' está em kwargs
+    if "contents" in kwargs:
+        return kwargs["contents"]
+    
+    # 2. Varre os argumentos posicionais pulando instâncias de classe (ex: self)
+    for arg in args:
+        if isinstance(arg, list):
+            return arg
+        if isinstance(arg, str):
+            # Tenta evitar nomes de métodos de classe ou strings muito curtas
+            if len(arg) > 5 and not arg.startswith("gemini-") and not arg.startswith("gpt-"):
+                return arg
+    return None
+
 def _normalize_llm_span_data(args, kwargs, response):
     """
     Tenta normalizar os inputs/outputs do Google GenAI para o formato padrão do MLflow/OpenAI,
     permitindo que a UI de Traces renderize as ferramentas (tool calling) e chats perfeitamente.
+    Suporta métodos de classe (self), respostas brutas, strings simples e dicts.
     """
     normalized_inputs = {"messages": []}
     normalized_outputs = {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": []}}]}
     
     try:
         # Processa Inputs
-        contents = kwargs.get("contents") or (args[0] if len(args) > 0 else None)
+        contents = _get_contents_from_args_kwargs(args, kwargs)
+        
         if isinstance(contents, list):
             for c in contents:
+                if isinstance(c, dict):
+                    role = c.get("role", "user")
+                    if role == "model": role = "assistant"
+                    text_content = c.get("content", "")
+                    normalized_inputs["messages"].append({"role": role, "content": text_content.strip()})
+                    continue
+
                 role = getattr(c, "role", "user")
-                # Mapeia role 'model' para 'assistant' (padrão OpenAI)
                 if role == "model": role = "assistant"
                 
                 text_content = ""
@@ -191,9 +240,15 @@ def _normalize_llm_span_data(args, kwargs, response):
                     if hasattr(p, "text") and p.text:
                         text_content += p.text
                     elif hasattr(p, "function_response") and p.function_response:
-                        text_content += f"\n[Function Response: {getattr(p.function_response, 'name', '')} -> {getattr(p.function_response, 'response', {})}]"
+                        resp_val = getattr(p.function_response, "response", {})
+                        text_content += f"\n[Function Response: {getattr(p.function_response, 'name', '')} -> {resp_val}]"
                 
+                if not text_content and hasattr(c, "text") and c.text:
+                    text_content = c.text
+
                 normalized_inputs["messages"].append({"role": role, "content": text_content.strip()})
+        elif isinstance(contents, str):
+            normalized_inputs["messages"].append({"role": "user", "content": contents.strip()})
         else:
             return None, None
             
@@ -222,6 +277,8 @@ def _normalize_llm_span_data(args, kwargs, response):
                     normalized_outputs["choices"][0]["message"]["tool_calls"] = tool_calls
             else:
                 return None, None
+        elif isinstance(response, str):
+            normalized_outputs["choices"][0]["message"]["content"] = response.strip()
         else:
             return None, None
             
@@ -238,7 +295,8 @@ def _normalize_llm_span_data(args, kwargs, response):
             pass
 
         return normalized_inputs, normalized_outputs
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Erro ao normalizar dados do span de LLM: {e}")
         return None, None
 
 def llm_span(name: Optional[str] = None):

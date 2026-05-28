@@ -191,8 +191,29 @@ export function agentSpan(spanName, asyncFunc) {
 }
 
 const MODEL_PRICES = {
-    'gemini-2.5-flash': { input: 0.075, output: 0.30 },
-    'gemini-2.5-pro': { input: 1.25, output: 5.00 },
+    'claude-opus-4.7': { input: 4.82, output: 23.80 },
+    'claude-opus-4.6': { input: 4.82, output: 23.80 },
+    'claude-sonnet-4.6': { input: 2.80, output: 14.30 },
+    'claude-opus-4.5': { input: 4.82, output: 23.80 },
+    'claude-sonnet-4.5': { input: 2.80, output: 14.30 },
+    'claude-haiku-4.5': { input: 0.95, output: 4.80 },
+    'claude-sonnet-4': { input: 3.00, output: 15.00 },
+    'claude-3.5-haiku': { input: 0.80, output: 4.00 },
+    'gpt-5.5': { input: 5.00, output: 30.00 },
+    'gpt-5.4-pro': { input: 30.00, output: 180.00 },
+    'gpt-5.4': { input: 2.50, output: 15.00 },
+    'gpt-5.3-codex': { input: 1.80, output: 14.00 },
+    'gpt-5.3-chat': { input: 1.80, output: 14.00 },
+    'gpt-5.4-nano': { input: 0.20, output: 1.30 },
+    'gpt-5.4-mini': { input: 0.75, output: 4.50 },
+    'gpt-5.1': { input: 1.30, output: 10.00 },
+    'gemini-3.1-pro-preview': { input: 2.00, output: 12.00 },
+    'gemini-3.5-flash': { input: 1.50, output: 9.00 },
+    'gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
+    'gemini-3.1-flash-lite-preview': { input: 0.25, output: 1.50 },
+    'gemini-3-pro-image-preview': { input: 2.00, output: 12.00 },
+    'gemini-2.5-flash': { input: 0.30, output: 2.50 },
+    'gemini-2.5-pro': { input: 1.30, output: 10.00 },
     'gemini-1.5-flash': { input: 0.075, output: 0.30 },
     'gemini-1.5-pro': { input: 1.25, output: 5.00 },
     'gemini-1.0-pro': { input: 0.50, output: 1.50 },
@@ -240,6 +261,11 @@ function _extractAndLogTokens(runId, response, span = null) {
                 span.setAttribute('llm.usage.prompt_tokens', p);
                 span.setAttribute('llm.usage.completion_tokens', c);
                 span.setAttribute('llm.usage.total_tokens', t);
+                
+                // OpenTelemetry / MLflow GenAI standard attributes
+                span.setAttribute('gen_ai.usage.prompt_tokens', p);
+                span.setAttribute('gen_ai.usage.completion_tokens', c);
+                span.setAttribute('gen_ai.usage.total_tokens', t);
             }
 
             // Cálculo de custo
@@ -260,7 +286,7 @@ function _extractAndLogTokens(runId, response, span = null) {
                     total_cost: totalCost
                 }));
                 span.setAttribute('mlflow.llm.model', modelName);
-                span.setAttribute('mlflow.llm.provider', modelName.includes('gemini') ? 'google' : 'openai');
+                span.setAttribute('mlflow.llm.provider', modelName.toLowerCase().includes('gemini') ? 'google' : (modelName.toLowerCase().includes('claude') ? 'anthropic' : 'openai'));
                 span.setAttribute('gen_ai.request.model', modelName);
                 span.setAttribute('gen_ai.response.model', modelName);
             }
