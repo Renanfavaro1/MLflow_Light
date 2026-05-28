@@ -5,6 +5,27 @@ import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { Resource } from '@opentelemetry/resources';
 
+class LightMLflowSpanProcessor {
+    constructor(exporter) {
+        this.exporter = exporter;
+    }
+    onStart(span, parentContext) {}
+    onEnd(span) {
+        // Envia apenas spans criados pelo tracer do nosso SDK.
+        // Spans automáticos (Firestore, Storage, HTTP, etc.) são ignorados.
+        const scope = span.instrumentationScope || span.instrumentationLibrary;
+        if (scope && scope.name === 'light-mlflow-node') {
+            this.exporter.export([span], () => {});
+        }
+    }
+    async shutdown() {
+        return this.exporter.shutdown();
+    }
+    async forceFlush() {
+        return this.exporter.forceFlush();
+    }
+}
+
 class LightMLflowConfig {
     static experimentId = null;
     static client = null;
@@ -56,9 +77,8 @@ class LightMLflowConfig {
                 },
             });
 
-            // Usamos SimpleSpanProcessor para flush imediato dos spans no encerramento de cada bloco,
-            // garantindo o envio sem depender de timers ou sofrer com o ciclo de vida do Cloud Run.
-            provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
+            // Usamos nosso LightMLflowSpanProcessor customizado para enviar apenas spans do SDK
+            provider.addSpanProcessor(new LightMLflowSpanProcessor(exporter));
             provider.register();
 
             this.provider = provider;
