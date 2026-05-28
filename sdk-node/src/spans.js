@@ -1,5 +1,9 @@
-import LightMLflowConfig, { runStorage } from './config.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import LightMLflowConfig from './config.js';
 import opentelemetry from '@opentelemetry/api';
+
+// Armazenamento assíncrono para manter o contexto da Execução (Run) entre diferentes funções assíncronas.
+export const runStorage = new AsyncLocalStorage();
 
 
 /**
