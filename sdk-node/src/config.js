@@ -10,10 +10,9 @@ export const runStorage = new AsyncLocalStorage();
 
 class MLflowSampler {
     shouldSample(context, traceId, spanName, spanKind, attributes, links) {
-        // Se há um runId ativo no local storage (ou seja, dentro de trackPipeline), sampleamos.
-        // Spans gerados por outras bibliotecas (como Firestore/GCS) fora do trackPipeline são descartados.
-        const runId = runStorage.getStore();
-        if (runId) {
+        // Se o span tem atributos do MLflow (mlflow.run_id ou mlflow.spanType), nós gravamos.
+        // Spans automáticos de outras bibliotecas (Firestore, GCS, etc.) são ignorados.
+        if (attributes && (attributes['mlflow.run_id'] || attributes['mlflow.spanType'])) {
             return { decision: SamplingDecision.RECORD_AND_SAMPLE };
         }
         return { decision: SamplingDecision.NOT_RECORD };
