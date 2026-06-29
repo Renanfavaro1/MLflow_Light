@@ -9,6 +9,8 @@ resource "google_sql_database_instance" "mlflow_db_instance" {
   region           = var.region
 
   settings {
+    # Para suportar milhares de conexões simultâneas do Assistente Virtual, 
+    # recomenda-se o uso de um tier como 'db-custom-2-7680' ou superior no ambiente de Produção.
     tier = var.tier
     ip_configuration {
       ipv4_enabled    = false # Desativa IP público (Segurança)

@@ -6,9 +6,9 @@ unset MLFLOW_AUTH_CONFIG
 export MLFLOW_DISABLE_ENV_MANAGER_CHECK=true
 
 # Limita o número de conexões simultâneas que o container faz no Cloud SQL 
-# para não estourar o limite (FATAL: remaining connection slots...)
-export MLFLOW_SQLALCHEMYSTORE_POOL_SIZE=2
-export MLFLOW_SQLALCHEMYSTORE_MAX_OVERFLOW=3
+# Otimizado para Alta Concorrência (Assistente Virtual)
+export MLFLOW_SQLALCHEMYSTORE_POOL_SIZE=10
+export MLFLOW_SQLALCHEMYSTORE_MAX_OVERFLOW=20
 
 # As variáveis de ambiente BACKEND_STORE_URI e DEFAULT_ARTIFACT_ROOT
 # serão injetadas pelo Cloud Run no momento da execução, utilizando
@@ -23,5 +23,5 @@ mlflow server \
     --port ${PORT:-5000} \
     --backend-store-uri "${BACKEND_STORE_URI}" \
     --default-artifact-root "${DEFAULT_ARTIFACT_ROOT}" \
-    --workers ${MLFLOW_WORKERS:-2} \
+    --workers ${MLFLOW_WORKERS:-4} \
     --uvicorn-opts "--timeout-keep-alive 120"

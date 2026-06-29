@@ -20,6 +20,10 @@ class LightMLflowConfig:
         Configura o ambiente do MLflow.
         Se tracking_uri não for passado, tentará ler da variável de ambiente MLFLOW_TRACKING_URI.
         """
+        # Configuração nativa de retentativas do MLflow para Alta Concorrência
+        if not os.environ.get("MLFLOW_HTTP_REQUEST_MAX_RETRIES"):
+            os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = "10"
+
         uri = tracking_uri or os.environ.get("MLFLOW_TRACKING_URI")
         
         if uri:

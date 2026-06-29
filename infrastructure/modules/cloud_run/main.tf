@@ -12,6 +12,11 @@ resource "google_cloud_run_v2_service" "mlflow_server" {
   ingress  = "INGRESS_TRAFFIC_ALL" # Permite acesso da internet (da sua máquina local)
 
   template {
+    scaling {
+      max_instance_count = 100
+    }
+    max_instance_request_concurrency = 80
+
     containers {
       image = var.image
 
