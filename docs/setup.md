@@ -11,4 +11,4 @@ Como o servidor MLflow estará rodando no Cloud Run de forma privada, será nece
 ```bash
 export MLFLOW_TRACKING_URI="https://<SUA-URL-DO-CLOUD-RUN>"
 ```
-Se estiver rodando na máquina local sem conexão direta (ou sem IAP token), os códigos salvarão os experimentos na pasta `./mlruns` automaticamente.
+Se estiver rodando na máquina local sem acesso à rede da Light, os códigos salvarão os experimentos na pasta `./mlruns` automaticamente.

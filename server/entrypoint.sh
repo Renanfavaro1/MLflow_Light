@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Garante que NENHUMA configuração de auth nativa do MLflow seja carregada acidentalmente
+# Configuração proposital sem autenticação: O acesso já é gerenciado pelo próprio ambiente/rede, facilitando o uso pelo cientista de dados.
 unset MLFLOW_AUTH_CONFIG
 export MLFLOW_DISABLE_ENV_MANAGER_CHECK=true
 
