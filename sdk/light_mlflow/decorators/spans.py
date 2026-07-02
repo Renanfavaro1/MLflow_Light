@@ -355,13 +355,18 @@ def llm_span(name: Optional[str] = None):
 # ORQUESTRADOR RAIZ
 # ==============================================================================
 
-def track_pipeline(run_name: str = "pipeline_execution"):
+def track_pipeline(run_name: str = "pipeline_execution", experiment_name: str = None):
     """Decorator de alto nível para a função principal. Inicia o Run e o Span raiz."""
     def decorator(func):
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                with mlflow.start_run(run_name=run_name):
+                exp_id = None
+                if experiment_name:
+                    exp = mlflow.get_experiment_by_name(experiment_name)
+                    exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
+                
+                with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
                     with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
                         span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                         try:
@@ -375,7 +380,12 @@ def track_pipeline(run_name: str = "pipeline_execution"):
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                with mlflow.start_run(run_name=run_name):
+                exp_id = None
+                if experiment_name:
+                    exp = mlflow.get_experiment_by_name(experiment_name)
+                    exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
+                    
+                with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
                     with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
                         span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                         try:
