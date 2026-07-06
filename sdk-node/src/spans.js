@@ -254,9 +254,13 @@ function _extractAndLogTokens(runId, response, span = null) {
         }
 
         if (t > 0) {
-            LightMLflowConfig.client.logMetric(runId, "llm.usage.prompt_tokens", p);
-            LightMLflowConfig.client.logMetric(runId, "llm.usage.completion_tokens", c);
-            LightMLflowConfig.client.logMetric(runId, "llm.usage.total_tokens", t);
+            // Dispara métricas no background fora do contexto do Span atual (ROOT_CONTEXT).
+            // Isso previne o erro "operation on ended Span" sem adicionar latência de rede com await.
+            opentelemetry.context.with(opentelemetry.ROOT_CONTEXT, () => {
+                LightMLflowConfig.client.logMetric(runId, "llm.usage.prompt_tokens", p).catch(()=>{});
+                LightMLflowConfig.client.logMetric(runId, "llm.usage.completion_tokens", c).catch(()=>{});
+                LightMLflowConfig.client.logMetric(runId, "llm.usage.total_tokens", t).catch(()=>{});
+            });
 
             if (span) {
                 span.setAttribute('llm.usage.prompt_tokens', p);
@@ -276,9 +280,11 @@ function _extractAndLogTokens(runId, response, span = null) {
             const outputCost = (c * prices.output) / 1000000;
             const totalCost = inputCost + outputCost;
 
-            LightMLflowConfig.client.logMetric(runId, "llm.cost.input_cost", inputCost);
-            LightMLflowConfig.client.logMetric(runId, "llm.cost.output_cost", outputCost);
-            LightMLflowConfig.client.logMetric(runId, "llm.cost.total_cost", totalCost);
+            opentelemetry.context.with(opentelemetry.ROOT_CONTEXT, () => {
+                LightMLflowConfig.client.logMetric(runId, "llm.cost.input_cost", inputCost).catch(()=>{});
+                LightMLflowConfig.client.logMetric(runId, "llm.cost.output_cost", outputCost).catch(()=>{});
+                LightMLflowConfig.client.logMetric(runId, "llm.cost.total_cost", totalCost).catch(()=>{});
+            });
 
             if (span) {
                 span.setAttribute('mlflow.llm.cost', JSON.stringify({
