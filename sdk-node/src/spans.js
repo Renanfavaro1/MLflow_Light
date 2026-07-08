@@ -5,6 +5,18 @@ import opentelemetry from '@opentelemetry/api';
 // Armazenamento assíncrono para manter o contexto da Execução (Run) entre diferentes funções assíncronas.
 export const runStorage = new AsyncLocalStorage();
 
+/**
+ * Define o ID da sessão no Span ativo para que o MLflow agrupe os traces na aba "Sessions".
+ */
+export function setTraceSessionId(sessionId) {
+    if (!sessionId) return;
+    const span = opentelemetry.trace.getActiveSpan();
+    if (span) {
+        span.setAttribute('session.id', String(sessionId));
+        span.setAttribute('mlflow.session.id', String(sessionId));
+    }
+}
+
 
 /**
  * Função interna para gerenciar spans genéricos no OpenTelemetry

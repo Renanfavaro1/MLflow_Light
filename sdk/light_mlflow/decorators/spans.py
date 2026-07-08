@@ -174,6 +174,15 @@ def _trace_with_type(span_type: str, name: Optional[str] = None):
             return sync_wrapper
     return decorator
 
+def set_trace_session_id(session_id: str):
+    """Define o ID da sessão no Span ativo para que o MLflow agrupe os traces na aba 'Sessions'."""
+    if not session_id:
+        return
+    span = mlflow.get_current_active_span()
+    if span:
+        span.set_attribute('session.id', str(session_id))
+        span.set_attribute('mlflow.session.id', str(session_id))
+
 # ==============================================================================
 # SPANS GENAI - Componentes granulares para RAGs e Agentes
 # ==============================================================================
