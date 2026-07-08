@@ -1,5 +1,5 @@
 import LightMLflowConfig from './config.js';
-import { trackPipeline, llmSpan, toolSpan, retrieverSpan, agentSpan } from './spans.js';
+import { trackPipeline, llmSpan, toolSpan, retrieverSpan, agentSpan, setTraceSessionId } from './spans.js';
 
 export {
     LightMLflowConfig,
@@ -7,5 +7,6 @@ export {
     llmSpan,
     toolSpan,
     retrieverSpan,
-    agentSpan
+    agentSpan,
+    setTraceSessionId
 };
