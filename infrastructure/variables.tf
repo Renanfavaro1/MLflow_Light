@@ -38,7 +38,7 @@ variable "service_name" {
 variable "etl_image" {
   description = "Docker image for the ETL Job (MLflow to Databricks)"
   type        = string
-  default     = "us-central1-docker.pkg.dev/light-energia-dev-a39122fa/mlflow_docker/mlflow-etl-job:latest"
+  default     = "us-central1-docker.pkg.dev/light-energia-dev-a39122fa/mlflow-docker/mlflow-etl-job:latest"
 }
 
 variable "etl_schedule" {
