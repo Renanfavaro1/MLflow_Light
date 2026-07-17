@@ -1,0 +1,37 @@
+steps:
+  # 1. Fazer o Build da Imagem Docker
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$COMMIT_SHA'
+      - '-f'
+      - 'Dockerfile_etl'
+      - '.'
+    dir: 'scripts' # Executa os comandos a partir da pasta scripts/
+
+  # 2. Fazer o Push da Imagem para o Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$COMMIT_SHA'
+
+  # 3. Atualizar o Cloud Run Job com a nova Imagem
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'jobs'
+      - 'update'
+      - 'mlflow-to-gcs-etl' # Nome do Job (já deve ter sido criado a 1ª vez)
+      - '--image'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$COMMIT_SHA'
+      - '--region'
+      - '$_REGION'
+
+substitutions:
+  _REGION: 'us-central1'
+  _REPO_NAME: 'mlflow_docker' # Repositório no Artifact Registry
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -34,3 +34,15 @@ variable "service_name" {
   type        = string
   default     = "mlflow-tracking-server"
 }
+
+variable "etl_image" {
+  description = "Docker image for the ETL Job (MLflow to Databricks)"
+  type        = string
+  default     = "us-central1-docker.pkg.dev/light-energia-dev-a39122fa/mlflow_docker/mlflow-etl-job:latest"
+}
+
+variable "etl_schedule" {
+  description = "Cron schedule for the ETL Job"
+  type        = string
+  default     = "0 3 * * *"
+}
