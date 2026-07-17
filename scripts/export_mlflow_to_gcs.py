@@ -74,8 +74,9 @@ def main():
     
     try:
         engine = get_db_engine()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        prefix = f"mlflow_export/date={datetime.now().strftime('%Y%m%d')}/run_{timestamp}"
+        # Modificado para sempre sobrescrever a pasta "latest"
+        # GCS cuida do versionamento, e o Databricks lê a versão mais recente sem duplicar dados.
+        prefix = "mlflow_export/latest"
         
         # 1. Extração: Experimentos
         df_experiments = extract_table_to_df(engine, "experiments")
