@@ -9,6 +9,13 @@ logger = logging.getLogger("light_mlflow.spans")
 
 def _safe_serialize(obj):
     """Garante que objetos complexos (bytes, Pydantic, etc) não quebrem o Trace do MLflow, transformando-os em dicionários navegáveis."""
+    # TRUNCAMENTO DE SEGURANÇA: Evita que textos gigantes (ex: 20MB de PDF) derrubem o MLflow
+    if isinstance(obj, str):
+        max_len = 10000
+        if len(obj) > max_len:
+            return obj[:max_len] + f"\n\n... [TEXTO TRUNCADO PELO LIGHT_MLFLOW: O original tinha {len(obj)} caracteres]"
+        return obj
+
     if isinstance(obj, dict):
         return {k: _safe_serialize(v) for k, v in obj.items()}
     if isinstance(obj, list):
