@@ -31,7 +31,7 @@ steps:
 
 substitutions:
   _REGION: 'us-central1'
-  _REPO_NAME: 'mlflow_docker' # Repositório no Artifact Registry
+  _REPO_NAME: 'mlflow-docker' # Repositório no Artifact Registry
 
 options:
   logging: CLOUD_LOGGING_ONLY

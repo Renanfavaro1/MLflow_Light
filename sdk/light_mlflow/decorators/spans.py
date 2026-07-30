@@ -3,9 +3,58 @@ import mlflow
 import inspect
 import logging
 import json
+import contextvars
 from typing import Optional
 
 logger = logging.getLogger("light_mlflow.spans")
+
+# ==============================================================================
+# ACUMULADOR DE TOKENS (bubbling automático para o Span Raiz)
+# ==============================================================================
+# Quando @track_pipeline inicia, ele cria um _TokenAccumulator e o armazena
+# nesta ContextVar. Cada @llm_span que extrai tokens alimenta esse acumulador.
+# Ao final da pipeline, o total acumulado é escrito no Span Raiz, fazendo a
+# coluna "Tokens" da tabela principal do MLflow exibir o valor correto.
+
+_trace_token_accumulator = contextvars.ContextVar('_trace_token_accumulator', default=None)
+
+class _TokenAccumulator:
+    """Acumulador thread/context-safe de tokens consumidos durante uma pipeline."""
+    __slots__ = ('prompt_tokens', 'completion_tokens', 'total_tokens', 'total_cost', 'model_name')
+
+    def __init__(self):
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.total_cost = 0.0
+        self.model_name = None
+
+    def add(self, p: int, c: int, t: int, cost: float = 0.0, model: str = None):
+        self.prompt_tokens += p
+        self.completion_tokens += c
+        self.total_tokens += t
+        self.total_cost += cost
+        if model:
+            self.model_name = model
+
+def _flush_accumulator_to_span(span):
+    """Escreve os totais acumulados de tokens/custo no span raiz da pipeline."""
+    acc = _trace_token_accumulator.get(None)
+    if not acc or acc.total_tokens == 0:
+        return
+    try:
+        span.set_attribute("llm.usage.prompt_tokens", acc.prompt_tokens)
+        span.set_attribute("llm.usage.completion_tokens", acc.completion_tokens)
+        span.set_attribute("llm.usage.total_tokens", acc.total_tokens)
+        span.set_attribute("gen_ai.usage.prompt_tokens", acc.prompt_tokens)
+        span.set_attribute("gen_ai.usage.completion_tokens", acc.completion_tokens)
+        span.set_attribute("gen_ai.usage.total_tokens", acc.total_tokens)
+        if acc.total_cost > 0:
+            span.set_attribute("mlflow.llm.cost", json.dumps({"total_cost": acc.total_cost}))
+        if acc.model_name:
+            span.set_attribute("gen_ai.request.model", acc.model_name)
+    except Exception as e:
+        logger.warning(f"Falha ao propagar tokens acumulados para o span raiz: {e}")
 
 def _safe_serialize(obj):
     """Garante que objetos complexos (bytes, Pydantic, etc) não quebrem o Trace do MLflow, transformando-os em dicionários navegáveis."""
@@ -144,6 +193,11 @@ def _extract_and_log_tokens(response, span=None):
                 span.set_attribute("mlflow.llm.provider", "google" if "gemini" in model_name.lower() else ("anthropic" if "claude" in model_name.lower() else "openai"))
                 span.set_attribute("gen_ai.request.model", model_name)
                 span.set_attribute("gen_ai.response.model", model_name)
+
+            # Alimenta o acumulador da pipeline (se existir)
+            acc = _trace_token_accumulator.get(None)
+            if acc:
+                acc.add(p_tokens, c_tokens, t_tokens, total_cost, model_name)
             
     except Exception as e:
         logger.warning(f"Aviso: Falha ao extrair métricas de tokens da resposta LLM. Erro: {e}")
@@ -329,8 +383,8 @@ def llm_span(name: Optional[str] = None):
                         
                         norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
                         if norm_in and norm_out:
-                            span.set_inputs(norm_in)
-                            span.set_outputs(norm_out)
+                            span.set_inputs(_safe_serialize(norm_in))
+                            span.set_outputs(_safe_serialize(norm_out))
                         else:
                             span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                             span.set_outputs(_safe_serialize(response))
@@ -351,8 +405,8 @@ def llm_span(name: Optional[str] = None):
                         
                         norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
                         if norm_in and norm_out:
-                            span.set_inputs(norm_in)
-                            span.set_outputs(norm_out)
+                            span.set_inputs(_safe_serialize(norm_in))
+                            span.set_outputs(_safe_serialize(norm_out))
                         else:
                             span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
                             span.set_outputs(_safe_serialize(response))
@@ -372,7 +426,12 @@ def llm_span(name: Optional[str] = None):
 # ==============================================================================
 
 def track_pipeline(run_name: str = "pipeline_execution", experiment_name: str = None):
-    """Decorator de alto nível para a função principal. Inicia o Run e o Span raiz."""
+    """Decorator de alto nível para a função principal. Inicia o Run e o Span raiz.
+    
+    Também inicializa um acumulador de tokens via contextvars. Qualquer @llm_span
+    executado dentro desta pipeline alimentará o acumulador, e ao final os totais
+    serão escritos automaticamente no Span Raiz (visível na coluna 'Tokens' da UI).
+    """
     def decorator(func):
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -382,16 +441,24 @@ def track_pipeline(run_name: str = "pipeline_execution", experiment_name: str = 
                     exp = mlflow.get_experiment_by_name(experiment_name)
                     exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
                 
-                with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
-                    with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
-                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                        try:
-                            res = await func(*args, **kwargs)
-                            span.set_outputs(_safe_serialize(res))
-                            return res
-                        except Exception as e:
-                            span.set_status("ERROR")
-                            raise e
+                # Inicializa o acumulador de tokens para esta pipeline
+                acc = _TokenAccumulator()
+                ctx_token = _trace_token_accumulator.set(acc)
+                try:
+                    with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
+                        with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
+                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                            try:
+                                res = await func(*args, **kwargs)
+                                span.set_outputs(_safe_serialize(res))
+                                return res
+                            except Exception as e:
+                                span.set_status("ERROR")
+                                raise e
+                            finally:
+                                _flush_accumulator_to_span(span)
+                finally:
+                    _trace_token_accumulator.reset(ctx_token)
             return async_wrapper
         else:
             @functools.wraps(func)
@@ -400,16 +467,24 @@ def track_pipeline(run_name: str = "pipeline_execution", experiment_name: str = 
                 if experiment_name:
                     exp = mlflow.get_experiment_by_name(experiment_name)
                     exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
-                    
-                with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
-                    with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
-                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                        try:
-                            res = func(*args, **kwargs)
-                            span.set_outputs(_safe_serialize(res))
-                            return res
-                        except Exception as e:
-                            span.set_status("ERROR")
-                            raise e
+                
+                # Inicializa o acumulador de tokens para esta pipeline
+                acc = _TokenAccumulator()
+                ctx_token = _trace_token_accumulator.set(acc)
+                try:
+                    with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
+                        with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
+                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                            try:
+                                res = func(*args, **kwargs)
+                                span.set_outputs(_safe_serialize(res))
+                                return res
+                            except Exception as e:
+                                span.set_status("ERROR")
+                                raise e
+                            finally:
+                                _flush_accumulator_to_span(span)
+                finally:
+                    _trace_token_accumulator.reset(ctx_token)
             return sync_wrapper
     return decorator
