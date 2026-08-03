@@ -86,6 +86,10 @@ def _safe_serialize(obj):
             
     if isinstance(obj, bytes):
         return "<bytes_data>"
+
+    # Tratamento para FastAPI UploadFile e objetos similares de upload
+    if hasattr(obj, "filename") and hasattr(obj, "content_type"):
+        return f"<UploadFile: {getattr(obj, 'filename', '?')} ({getattr(obj, 'content_type', '?')})>"
         
     try:
         json.dumps(obj)
