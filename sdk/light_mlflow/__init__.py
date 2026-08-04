@@ -6,7 +6,8 @@ from .decorators.spans import (
     retriever_span,
     agent_span,
     chain_span,
-    set_trace_session_id
+    set_trace_session_id,
+    set_trace_user_id
 )
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "retriever_span",
     "agent_span",
     "chain_span",
-    "set_trace_session_id"
+    "set_trace_session_id",
+    "set_trace_user_id"
 ]

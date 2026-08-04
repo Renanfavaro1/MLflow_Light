@@ -247,6 +247,19 @@ def set_trace_session_id(session_id: str):
     if span:
         span.set_attribute('session.id', str(session_id))
         span.set_attribute('mlflow.session.id', str(session_id))
+        span.set_attribute('mlflow.trace.session_id', str(session_id))
+        span.set_attribute('session_id', str(session_id))
+
+def set_trace_user_id(user_id: str):
+    """Define o ID do usuário no Span ativo para exibição na coluna User dos Traces do MLflow."""
+    if not user_id:
+        return
+    span = mlflow.get_current_active_span()
+    if span:
+        span.set_attribute('user.id', str(user_id))
+        span.set_attribute('mlflow.user', str(user_id))
+        span.set_attribute('mlflow.trace.user_id', str(user_id))
+        span.set_attribute('user_id', str(user_id))
 
 # ==============================================================================
 # SPANS GENAI - Componentes granulares para RAGs e Agentes
