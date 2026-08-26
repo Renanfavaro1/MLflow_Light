@@ -6,8 +6,8 @@ steps:
       - '-t'
       - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$_TAG_NAME'
       - '-f'
-      - 'Dockerfile_etl'
-      - '.'
+      - 'scripts/Dockerfile_etl'
+      - 'scripts'
 
   # 2. Fazer o Push da Imagem para o Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
