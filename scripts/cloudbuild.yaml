@@ -4,7 +4,7 @@ steps:
     args:
       - 'build'
       - '-t'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$TAG_NAME'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$_TAG_NAME'
       - '-f'
       - 'Dockerfile_etl'
       - '.'
@@ -13,7 +13,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$TAG_NAME'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$_TAG_NAME'
 
   # 3. Atualizar o Cloud Run Job com a nova Imagem
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -24,14 +24,14 @@ steps:
       - 'update'
       - 'mlflow-to-gcs-etl'
       - '--image'
-      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$TAG_NAME'
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/$_REPO_NAME/mlflow-etl-job:$_TAG_NAME'
       - '--region'
       - '$_REGION'
 
 substitutions:
   _REGION: 'us-central1'
   _REPO_NAME: 'mlflow-docker'
-  TAG_NAME: 'latest'
+  _TAG_NAME: 'latest'
 
 options:
   logging: CLOUD_LOGGING_ONLY
