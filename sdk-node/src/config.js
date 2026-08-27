@@ -1,4 +1,4 @@
-import MLflowClient from './client.js';
+import MLflowClient, { getGoogleIdToken } from './client.js';
 import opentelemetry from '@opentelemetry/api';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
@@ -67,11 +67,17 @@ class LightMLflowConfig {
                 }),
             });
 
+            const token = await getGoogleIdToken(cleanUri);
+            const otlpHeaders = {
+                'x-mlflow-experiment-id': String(this.experimentId),
+            };
+            if (token) {
+                otlpHeaders['Authorization'] = `Bearer ${token}`;
+            }
+
             const exporter = new OTLPTraceExporter({
                 url: otlpUrl,
-                headers: {
-                    'x-mlflow-experiment-id': String(this.experimentId),
-                },
+                headers: otlpHeaders,
                 httpAgentOptions: {
                     rejectUnauthorized: false,
                 },

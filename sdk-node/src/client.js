@@ -1,22 +1,72 @@
 import axios from 'axios';
 import https from 'https';
 
+let cachedToken = null;
+let tokenExpiry = 0;
+
+/**
+ * Obtém o Google ID Token automaticamente do Metadata Server do Cloud Run ou do ambiente.
+ */
+export async function getGoogleIdToken(audience) {
+    if (!audience) return null;
+
+    // 1. Se já fornecido manualmente via variável de ambiente
+    if (process.env.MLFLOW_TRACKING_TOKEN) {
+        return process.env.MLFLOW_TRACKING_TOKEN;
+    }
+
+    // 2. Retorna token em cache se válido por mais de 5 minutos
+    const now = Date.now();
+    if (cachedToken && tokenExpiry > now + 5 * 60 * 1000) {
+        return cachedToken;
+    }
+
+    // 3. Tenta buscar no Google Metadata Server (ambiente Cloud Run / GCP)
+    try {
+        const cleanAud = audience.endsWith('/') ? audience.slice(0, -1) : audience;
+        const metadataUrl = `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(cleanAud)}`;
+        const res = await axios.get(metadataUrl, {
+            headers: { 'Metadata-Flavor': 'Google' },
+            timeout: 1500
+        });
+        if (res.data) {
+            cachedToken = String(res.data).trim();
+            tokenExpiry = now + 50 * 60 * 1000; // Cache de 50 minutos
+            return cachedToken;
+        }
+    } catch (_) {
+        // Não está no Cloud Run ou metadata indisponível (ex: local)
+    }
+
+    return null;
+}
+
 class MLflowClient {
     constructor(trackingUri) {
         if (!trackingUri) {
             throw new Error("MLFLOW_TRACKING_URI is required");
         }
         
+        this.trackingUri = trackingUri.endsWith('/') ? trackingUri.slice(0, -1) : trackingUri;
+
         // Configuração do Agente HTTPS para ignorar erros de certificado auto-assinado
-        // (Útil para contornar bloqueios de proxy corporativo como o da Light)
         const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
         this.client = axios.create({
-            baseURL: trackingUri.endsWith('/') ? trackingUri.slice(0, -1) : trackingUri,
+            baseURL: this.trackingUri,
             headers: {
                 'Content-Type': 'application/json'
             },
             httpsAgent: httpsAgent
+        });
+
+        // Interceptor para injetar automaticamente o Bearer Token do Google
+        this.client.interceptors.request.use(async (config) => {
+            const token = await getGoogleIdToken(this.trackingUri);
+            if (token) {
+                config.headers['Authorization'] = `Bearer ${token}`;
+            }
+            return config;
         });
     }
 
