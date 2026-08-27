@@ -6,6 +6,8 @@ from datetime import datetime
 import pandas as pd
 from sqlalchemy import create_engine, text
 from google.cloud import storage
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 # --- Configurações de Log ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,73 +38,93 @@ def get_all_public_tables(engine):
     return df_tables['table_name'].tolist()
 
 def sanitize_df_for_parquet(df):
-    """Garante que colunas com estruturas complexas (dicts/listas/JSON) sejam serializadas sem erro no PyArrow."""
+    """Garante que colunas com estruturas complexas (dicts/listas/JSON/bytes) sejam serializadas sem erro no PyArrow."""
     for col in df.columns:
         if df[col].dtype == 'object':
-            first_valid = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
-            if isinstance(first_valid, (dict, list)):
-                df[col] = df[col].apply(lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (dict, list)) else (str(x) if x is not None else None))
-            elif isinstance(first_valid, bytes):
-                df[col] = df[col].apply(lambda x: "<bytes>" if x is not None else None)
+            df[col] = df[col].apply(
+                lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (dict, list))
+                else (x.decode('utf-8', errors='replace') if isinstance(x, bytes)
+                else (str(x) if x is not None and not isinstance(x, (str, int, float, bool)) else x))
+            )
     return df
 
-def save_df_to_gcs_parquet(df, bucket_name, destination_blob_name):
-    """Salva o DataFrame como Parquet diretamente no GCS liberando arquivos temporários."""
-    if df.empty:
-        return
+def extract_and_export_table(engine, table_name, bucket_name, prefix, chunksize=1000):
+    """Extrai dados em streaming (chunks) e grava incrementalmente no Parquet com consumo mínimo de RAM."""
+    logger.info(f"Extraindo dados de: {table_name} (modo streaming de {chunksize} linhas)...")
+    temp_file = f"/tmp/{table_name}.parquet"
+    
+    if os.path.exists(temp_file):
+        try:
+            os.remove(temp_file)
+        except Exception:
+            pass
 
-    logger.info(f"Iniciando upload de Parquet para gs://{bucket_name}/{destination_blob_name} ({len(df)} registros)...")
-    temp_file = f"/tmp/{destination_blob_name.split('/')[-1]}"
+    writer = None
+    total_rows = 0
+    
     try:
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(destination_blob_name)
-
-        # Sanitiza tipos complexos antes de salvar
-        df_sanitized = sanitize_df_for_parquet(df)
-        df_sanitized.to_parquet(temp_file, index=False, compression='snappy')
+        query = text(f"SELECT * FROM {table_name}")
         
-        blob.upload_from_filename(temp_file)
-        logger.info(f"Upload concluído: gs://{bucket_name}/{destination_blob_name} ({len(df)} registros)")
+        # Conecta com cursor no servidor do PostgreSQL (stream_results=True não carrega tudo na RAM)
+        with engine.connect().execution_options(stream_results=True) as conn:
+            for chunk in pd.read_sql_query(query, conn, chunksize=chunksize):
+                if chunk.empty:
+                    continue
+                
+                # Sanitiza apenas o lote atual de 1.000 linhas
+                chunk_sanitized = sanitize_df_for_parquet(chunk)
+                table_arrow = pa.Table.from_pandas(chunk_sanitized, preserve_index=False)
+                
+                # Inicializa o escritor Parquet no primeiro lote
+                if writer is None:
+                    writer = pq.ParquetWriter(temp_file, table_arrow.schema, compression='snappy')
+                
+                writer.write_table(table_arrow)
+                total_rows += len(chunk)
+                
+                # Libera o lote imediatamente da memória RAM
+                del chunk
+                del chunk_sanitized
+                del table_arrow
+                gc.collect()
+
+        if writer is not None:
+            writer.close()
+            writer = None
+
+        if total_rows > 0:
+            logger.info(f"Fazendo upload para o GCS: {table_name}.parquet ({total_rows} registros)...")
+            storage_client = storage.Client()
+            bucket = storage_client.bucket(bucket_name)
+            
+            blob = bucket.blob(f"{prefix}/{table_name}.parquet")
+            blob.upload_from_filename(temp_file)
+            
+            # Compatibilidade legada para o Databricks
+            if table_name == "latest_metrics":
+                blob_compat = bucket.blob(f"{prefix}/metrics_latest.parquet")
+                blob_compat.upload_from_filename(temp_file)
+                
+            logger.info(f"✅ Upload concluído com sucesso: gs://{bucket_name}/{prefix}/{table_name}.parquet ({total_rows} registros)")
+            return True
+        else:
+            logger.info(f"Tabela '{table_name}' vazia. Pulando.")
+            return False
+
     except Exception as e:
-        logger.error(f"Erro ao fazer upload para o GCS ({destination_blob_name}): {e}")
+        logger.error(f"⚠️ Aviso: Falha ao exportar tabela '{table_name}': {e}")
+        return False
     finally:
+        if writer is not None:
+            try:
+                writer.close()
+            except Exception:
+                pass
         if os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
             except Exception:
                 pass
-
-def extract_and_export_table(engine, table_name, bucket_name, prefix):
-    """Extrai uma tabela do banco e exporta para o GCS com baixo consumo de memória."""
-    logger.info(f"Extraindo dados de: {table_name}...")
-    try:
-        # Se for a tabela pesada de spans ou metrics, lê e grava de forma otimizada
-        query = text(f"SELECT * FROM {table_name}")
-        df = pd.read_sql_query(query, engine)
-        
-        row_count = len(df)
-        logger.info(f"Extração concluída para {table_name}. Linhas: {row_count}")
-        
-        if row_count > 0:
-            save_df_to_gcs_parquet(df, bucket_name, f"{prefix}/{table_name}.parquet")
-            
-            # Compatibilidade com queries legadas do Databricks
-            if table_name == "latest_metrics":
-                save_df_to_gcs_parquet(df, bucket_name, f"{prefix}/metrics_latest.parquet")
-            
-            return True
-        else:
-            logger.info(f"Tabela '{table_name}' vazia. Pulando upload.")
-            return False
-            
-    except Exception as e:
-        logger.error(f"⚠️ Aviso: Falha ao processar tabela '{table_name}': {e}")
-        return False
-    finally:
-        # Força liberação de memória RAM para evitar Out-Of-Memory (OOM)
-        if 'df' in locals():
-            del df
         gc.collect()
 
 def main():
