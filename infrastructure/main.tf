@@ -131,6 +131,13 @@ resource "google_cloud_run_v2_job" "etl_job" {
       containers {
         image = var.etl_image
 
+        resources {
+          limits = {
+            cpu    = "2"
+            memory = "2Gi"
+          }
+        }
+
         env {
           name  = "GCS_BUCKET_NAME"
           value = module.cloud_storage.stats_bucket_name
