@@ -1,24 +1,20 @@
 FROM python:3.11-slim
 
-# Variáveis de ambiente padrão, podem ser sobrescritas no Cloud Run
 ENV PYTHONUNBUFFERED=True
 ENV DATABASE_URL=""
 ENV GCS_BUCKET_NAME="mlflow_stats"
 
 WORKDIR /app
 
-# Instala as dependências do sistema necessárias para compilar pacotes como o psycopg2
+# Apenas libpq-dev para psycopg2 (sem build-essential = imagem menor)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
+    libpq-dev gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia e instala as dependências Python
 COPY requirements_etl.txt .
-RUN pip install --no-cache-dir -r requirements_etl.txt
+RUN pip install --no-cache-dir -r requirements_etl.txt \
+    && apt-get purge -y --auto-remove gcc
 
-# Copia o script
 COPY export_mlflow_to_gcs.py .
 
-# Comando de execução
 CMD ["python", "export_mlflow_to_gcs.py"]
