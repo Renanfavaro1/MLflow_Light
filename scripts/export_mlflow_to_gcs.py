@@ -75,6 +75,7 @@ def extract_and_export_table(engine, table_name, bucket_name, prefix, batch_size
         logger.info(f"Extraindo {total_in_db} registros de {table_name} em lotes de {batch_size}...")
 
         # 2. Paginação SQL real no PostgreSQL (Zero acúmulo de buffer em RAM)
+        writer_schema = None
         while offset < total_in_db:
             page_query = text(f"SELECT * FROM {table_name} LIMIT {batch_size} OFFSET {offset}")
             with engine.connect() as conn:
@@ -87,11 +88,25 @@ def extract_and_export_table(engine, table_name, bucket_name, prefix, batch_size
             chunk_sanitized = sanitize_df_for_parquet(chunk)
             table_arrow = pa.Table.from_pandas(chunk_sanitized, preserve_index=False)
 
-            # Inicializa o escritor Parquet no primeiro lote
+            # Inicializa o escritor Parquet garantindo que nenhuma coluna seja pa.null()
             if writer is None:
-                writer = pq.ParquetWriter(temp_file, table_arrow.schema, compression='snappy')
+                fields = []
+                for field in table_arrow.schema:
+                    if field.type == pa.null():
+                        # Substitui colunas totalmente nulas no 1º lote por string/double
+                        fields.append(pa.field(field.name, pa.string()))
+                    else:
+                        fields.append(field)
+                writer_schema = pa.schema(fields)
+                writer = pq.ParquetWriter(temp_file, writer_schema, compression='snappy')
 
-            writer.write_table(table_arrow)
+            # Faz o cast seguro do lote atual para o schema fixo do arquivo
+            try:
+                table_to_write = table_arrow.cast(writer_schema, safe=False)
+            except Exception:
+                table_to_write = table_arrow
+
+            writer.write_table(table_to_write)
             total_rows += len(chunk)
             offset += batch_size
 
