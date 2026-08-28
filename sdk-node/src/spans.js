@@ -93,14 +93,18 @@ export function trackPipeline(runName, asyncFunc) {
                         const result = await asyncFunc(...args);
                         span.setAttribute('mlflow.spanOutputs', JSON.stringify(_safeSerialize(result)));
                         span.setStatus({ code: opentelemetry.SpanStatusCode.OK });
-                        await LightMLflowConfig.client.updateRun(runId, "FINISHED");
+                        try {
+                            await LightMLflowConfig.client.updateRun(runId, "FINISHED");
+                        } catch (_) {}
                         return result;
                     } catch (e) {
                         span.setStatus({
                             code: opentelemetry.SpanStatusCode.ERROR,
                             message: e.message
                         });
-                        await LightMLflowConfig.client.updateRun(runId, "FAILED");
+                        try {
+                            await LightMLflowConfig.client.updateRun(runId, "FAILED");
+                        } catch (_) {}
                         throw e;
                     } finally {
                         span.end();
@@ -109,10 +113,14 @@ export function trackPipeline(runName, asyncFunc) {
             } else {
                 try {
                     const result = await asyncFunc(...args);
-                    await LightMLflowConfig.client.updateRun(runId, "FINISHED");
+                    try {
+                        await LightMLflowConfig.client.updateRun(runId, "FINISHED");
+                    } catch (_) {}
                     return result;
                 } catch (e) {
-                    await LightMLflowConfig.client.updateRun(runId, "FAILED");
+                    try {
+                        await LightMLflowConfig.client.updateRun(runId, "FAILED");
+                    } catch (_) {}
                     throw e;
                 }
             }

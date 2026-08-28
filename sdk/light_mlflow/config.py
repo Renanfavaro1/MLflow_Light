@@ -72,31 +72,45 @@ class LightMLflowConfig:
         """
         Configura o ambiente do MLflow.
         Se tracking_uri não for passado, tentará ler da variável de ambiente MLFLOW_TRACKING_URI.
+        Nunca interrompe a inicialização da aplicação em caso de falha de conexão ou 401/403.
         """
-        # Configuração nativa de retentativas do MLflow para Alta Concorrência
-        if not os.environ.get("MLFLOW_HTTP_REQUEST_MAX_RETRIES"):
-            os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = "10"
+        try:
+            # Configuração nativa de retentativas do MLflow para Alta Concorrência
+            if not os.environ.get("MLFLOW_HTTP_REQUEST_MAX_RETRIES"):
+                os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = "5"
 
-        uri = tracking_uri or os.environ.get("MLFLOW_TRACKING_URI")
-        
-        if uri:
-            mlflow.set_tracking_uri(uri)
-            logger.info(f"✅ MLflow Tracking URI configurado para: {uri}")
+            uri = tracking_uri or os.environ.get("MLFLOW_TRACKING_URI")
+            
+            if uri:
+                mlflow.set_tracking_uri(uri)
+                logger.info(f"✅ MLflow Tracking URI configurado para: {uri}")
 
-            # Resolve automaticamente o Google ID Token se rodando no Cloud Run
-            token = get_google_id_token(uri)
-            if token:
-                os.environ["MLFLOW_TRACKING_TOKEN"] = token
-                logger.info("🔑 Google ID Token obtido automaticamente para a Service Account.")
-        else:
-            logger.warning("⚠️ MLFLOW_TRACKING_URI não definido. O MLflow usará o armazenamento local (pasta mlruns/).")
+                # Se houver token estático configurado, usa diretamente
+                static_token = os.environ.get("MLFLOW_TRACKING_TOKEN")
+                if not static_token:
+                    # Resolve automaticamente o Google ID Token se rodando no Cloud Run
+                    token = get_google_id_token(uri)
+                    if token:
+                        os.environ["MLFLOW_TRACKING_TOKEN"] = token
+                        logger.info("🔑 Google ID Token obtido automaticamente para a Service Account.")
+            else:
+                logger.warning("⚠️ MLFLOW_TRACKING_URI não definido. O MLflow usará o armazenamento local (pasta mlruns/).")
 
-        # Define o experimento ativo. Se não existir, o MLflow cria automaticamente.
-        mlflow.set_experiment(experiment_name)
-        logger.info(f"✅ Experimento ativo: {experiment_name}")
+            # Define o experimento ativo. Se não existir ou falhar a conexão, não quebra a aplicação.
+            try:
+                mlflow.set_experiment(experiment_name)
+                logger.info(f"✅ Experimento ativo: {experiment_name}")
+            except Exception as exp_err:
+                logger.warning(f"⚠️ Não foi possível definir o experimento '{experiment_name}' no MLflow: {exp_err}. A aplicação continuará normalmente.")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Aviso: Falha na inicialização do MLflow: {e}. A aplicação prosseguirá normalmente sem telemetria.")
 
     @staticmethod
     def get_current_run_id() -> str:
         """Retorna o ID do run atual, se existir."""
-        active_run = mlflow.active_run()
-        return active_run.info.run_id if active_run else None
+        try:
+            active_run = mlflow.active_run()
+            return active_run.info.run_id if active_run else None
+        except Exception:
+            return None

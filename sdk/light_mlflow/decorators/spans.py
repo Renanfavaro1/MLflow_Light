@@ -215,35 +215,63 @@ def _extract_and_log_tokens(response, span=None):
         logger.warning(f"Aviso: Falha ao extrair métricas de tokens da resposta LLM. Erro: {e}")
 
 def _trace_with_type(span_type: str, name: Optional[str] = None):
-    """Factory interno para gerar decorators baseados no tipo do span."""
+    """Factory interno para gerar decorators baseados no tipo do span com resiliência total."""
     def decorator(func):
         span_name = name or func.__name__
         
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                with mlflow.start_span(name=span_name, span_type=span_type) as span:
-                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                    try:
-                        res = await func(*args, **kwargs)
-                        span.set_outputs(_safe_serialize(res))
+                try:
+                    with mlflow.start_span(name=span_name, span_type=span_type) as span:
+                        try:
+                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                        except Exception:
+                            pass
+                        try:
+                            res = await func(*args, **kwargs)
+                        except Exception as e:
+                            try:
+                                span.set_status("ERROR")
+                            except Exception:
+                                pass
+                            raise e
+                        try:
+                            span.set_outputs(_safe_serialize(res))
+                        except Exception:
+                            pass
                         return res
-                    except Exception as e:
-                        span.set_status("ERROR")
-                        raise e
+                except Exception as mlflow_err:
+                    # Se o erro veio de DENTRO da função (raise e), não captura aqui pois já foi propagado
+                    # Se capturou aqui, foi falha de infraestrutura do MLflow
+                    logger.debug(f"Aviso MLflow span ({span_name}): {mlflow_err}")
+                    return await func(*args, **kwargs)
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                with mlflow.start_span(name=span_name, span_type=span_type) as span:
-                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                    try:
-                        res = func(*args, **kwargs)
-                        span.set_outputs(_safe_serialize(res))
+                try:
+                    with mlflow.start_span(name=span_name, span_type=span_type) as span:
+                        try:
+                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                        except Exception:
+                            pass
+                        try:
+                            res = func(*args, **kwargs)
+                        except Exception as e:
+                            try:
+                                span.set_status("ERROR")
+                            except Exception:
+                                pass
+                            raise e
+                        try:
+                            span.set_outputs(_safe_serialize(res))
+                        except Exception:
+                            pass
                         return res
-                    except Exception as e:
-                        span.set_status("ERROR")
-                        raise e
+                except Exception as mlflow_err:
+                    logger.debug(f"Aviso MLflow span ({span_name}): {mlflow_err}")
+                    return func(*args, **kwargs)
             return sync_wrapper
     return decorator
 
@@ -395,53 +423,75 @@ def _normalize_llm_span_data(args, kwargs, response):
         return None, None
 
 def llm_span(name: Optional[str] = None):
-    """Rastreia uma chamada a LLM e extrai os gastos de Tokens."""
+    """Rastreia uma chamada a LLM e extrai os gastos de Tokens com resiliência total."""
     def decorator(func):
         span_name = name or func.__name__
         
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                with mlflow.start_span(name=span_name, span_type="LLM") as span:
-                    try:
-                        response = await func(*args, **kwargs)
+                try:
+                    with mlflow.start_span(name=span_name, span_type="LLM") as span:
+                        try:
+                            response = await func(*args, **kwargs)
+                        except Exception as e:
+                            try:
+                                span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                                span.set_status("ERROR")
+                            except Exception:
+                                pass
+                            raise e
                         
-                        norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
-                        if norm_in and norm_out:
-                            span.set_inputs(_safe_serialize(norm_in))
-                            span.set_outputs(_safe_serialize(norm_out))
-                        else:
-                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                            span.set_outputs(_safe_serialize(response))
-                            
-                        _extract_and_log_tokens(response, span)
+                        try:
+                            norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
+                            if norm_in and norm_out:
+                                span.set_inputs(_safe_serialize(norm_in))
+                                span.set_outputs(_safe_serialize(norm_out))
+                            else:
+                                span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                                span.set_outputs(_safe_serialize(response))
+                                
+                            _extract_and_log_tokens(response, span)
+                        except Exception:
+                            pass
+
                         return response
-                    except Exception as e:
-                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                        span.set_status("ERROR")
-                        raise e
+                except Exception as mlflow_err:
+                    logger.debug(f"Aviso MLflow LLM span ({span_name}): {mlflow_err}")
+                    return await func(*args, **kwargs)
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                with mlflow.start_span(name=span_name, span_type="LLM") as span:
-                    try:
-                        response = func(*args, **kwargs)
+                try:
+                    with mlflow.start_span(name=span_name, span_type="LLM") as span:
+                        try:
+                            response = func(*args, **kwargs)
+                        except Exception as e:
+                            try:
+                                span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                                span.set_status("ERROR")
+                            except Exception:
+                                pass
+                            raise e
                         
-                        norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
-                        if norm_in and norm_out:
-                            span.set_inputs(_safe_serialize(norm_in))
-                            span.set_outputs(_safe_serialize(norm_out))
-                        else:
-                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                            span.set_outputs(_safe_serialize(response))
-                            
-                        _extract_and_log_tokens(response, span)
+                        try:
+                            norm_in, norm_out = _normalize_llm_span_data(args, kwargs, response)
+                            if norm_in and norm_out:
+                                span.set_inputs(_safe_serialize(norm_in))
+                                span.set_outputs(_safe_serialize(norm_out))
+                            else:
+                                span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                                span.set_outputs(_safe_serialize(response))
+                                
+                            _extract_and_log_tokens(response, span)
+                        except Exception:
+                            pass
+
                         return response
-                    except Exception as e:
-                        span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                        span.set_status("ERROR")
-                        raise e
+                except Exception as mlflow_err:
+                    logger.debug(f"Aviso MLflow LLM span ({span_name}): {mlflow_err}")
+                    return func(*args, **kwargs)
             return sync_wrapper
             
     return decorator
@@ -456,59 +506,103 @@ def track_pipeline(run_name: str = "pipeline_execution", experiment_name: str = 
     Também inicializa um acumulador de tokens via contextvars. Qualquer @llm_span
     executado dentro desta pipeline alimentará o acumulador, e ao final os totais
     serão escritos automaticamente no Span Raiz (visível na coluna 'Tokens' da UI).
+    Nunca interrompe a execução caso o MLflow esteja inacessível ou não autenticado.
     """
     def decorator(func):
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                exp_id = None
-                if experiment_name:
-                    exp = mlflow.get_experiment_by_name(experiment_name)
-                    exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
-                
-                # Inicializa o acumulador de tokens para esta pipeline
                 acc = _TokenAccumulator()
                 ctx_token = _trace_token_accumulator.set(acc)
                 try:
-                    with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
-                        with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
-                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                            try:
-                                res = await func(*args, **kwargs)
-                                span.set_outputs(_safe_serialize(res))
+                    exp_id = None
+                    try:
+                        if experiment_name:
+                            exp = mlflow.get_experiment_by_name(experiment_name)
+                            exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
+                    except Exception as exp_err:
+                        logger.debug(f"Aviso ao consultar experimento '{experiment_name}': {exp_err}")
+
+                    try:
+                        with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
+                            with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
+                                try:
+                                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                                except Exception:
+                                    pass
+                                
+                                try:
+                                    res = await func(*args, **kwargs)
+                                except Exception as e:
+                                    try:
+                                        span.set_status("ERROR")
+                                    except Exception:
+                                        pass
+                                    raise e
+                                
+                                try:
+                                    span.set_outputs(_safe_serialize(res))
+                                except Exception:
+                                    pass
+                                
+                                try:
+                                    _flush_accumulator_to_span(span)
+                                except Exception:
+                                    pass
+
                                 return res
-                            except Exception as e:
-                                span.set_status("ERROR")
-                                raise e
-                            finally:
-                                _flush_accumulator_to_span(span)
+                    except Exception as mlflow_err:
+                        # Se o erro veio da aplicação (raise e), não captura aqui pois já foi relançado
+                        logger.warning(f"⚠️ MLflow indisponível ou não autorizado ({mlflow_err}). Prosseguindo execução sem telemetria.")
+                        return await func(*args, **kwargs)
                 finally:
                     _trace_token_accumulator.reset(ctx_token)
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                exp_id = None
-                if experiment_name:
-                    exp = mlflow.get_experiment_by_name(experiment_name)
-                    exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
-                
-                # Inicializa o acumulador de tokens para esta pipeline
                 acc = _TokenAccumulator()
                 ctx_token = _trace_token_accumulator.set(acc)
                 try:
-                    with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
-                        with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
-                            span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
-                            try:
-                                res = func(*args, **kwargs)
-                                span.set_outputs(_safe_serialize(res))
+                    exp_id = None
+                    try:
+                        if experiment_name:
+                            exp = mlflow.get_experiment_by_name(experiment_name)
+                            exp_id = exp.experiment_id if exp else mlflow.create_experiment(experiment_name)
+                    except Exception as exp_err:
+                        logger.debug(f"Aviso ao consultar experimento '{experiment_name}': {exp_err}")
+
+                    try:
+                        with mlflow.start_run(run_name=run_name, experiment_id=exp_id):
+                            with mlflow.start_span(name=func.__name__, span_type="CHAIN") as span:
+                                try:
+                                    span.set_inputs(_safe_serialize({"args": args, "kwargs": kwargs}))
+                                except Exception:
+                                    pass
+                                
+                                try:
+                                    res = func(*args, **kwargs)
+                                except Exception as e:
+                                    try:
+                                        span.set_status("ERROR")
+                                    except Exception:
+                                        pass
+                                    raise e
+                                
+                                try:
+                                    span.set_outputs(_safe_serialize(res))
+                                except Exception:
+                                    pass
+                                
+                                try:
+                                    _flush_accumulator_to_span(span)
+                                except Exception:
+                                    pass
+
                                 return res
-                            except Exception as e:
-                                span.set_status("ERROR")
-                                raise e
-                            finally:
-                                _flush_accumulator_to_span(span)
+                    except Exception as mlflow_err:
+                        logger.warning(f"⚠️ MLflow indisponível ou não autorizado ({mlflow_err}). Prosseguindo execução sem telemetria.")
+                        return func(*args, **kwargs)
                 finally:
                     _trace_token_accumulator.reset(ctx_token)
             return sync_wrapper
