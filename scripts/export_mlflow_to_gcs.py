@@ -37,19 +37,30 @@ def get_all_public_tables(engine):
         df_tables = pd.read_sql_query(text(query), conn)
     return df_tables['table_name'].tolist()
 
-def sanitize_df_for_parquet(df):
-    """Garante que colunas com estruturas complexas (dicts/listas/JSON/bytes) sejam serializadas sem erro no PyArrow."""
+def sanitize_df_for_parquet(df, max_str_len=30000):
+    """Garante que colunas complexas sejam strings consistentes e trunca payloads gigantes (base64/arquivos)."""
     for col in df.columns:
         if df[col].dtype == 'object':
-            df[col] = df[col].apply(
-                lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (dict, list))
-                else (x.decode('utf-8', errors='replace') if isinstance(x, bytes)
-                else (str(x) if x is not None and not isinstance(x, (str, int, float, bool)) else x))
-            )
+            def clean_val(x):
+                if x is None:
+                    return None
+                if isinstance(x, (dict, list)):
+                    s = json.dumps(x, ensure_ascii=False)
+                elif isinstance(x, bytes):
+                    s = x.decode('utf-8', errors='replace')
+                else:
+                    s = str(x)
+                
+                # Trunca strings anômalas (ex: imagens base64 ou PDFs inteiros) para no máximo 30KB
+                if len(s) > max_str_len:
+                    return s[:max_str_len] + "... [TRUNCATED]"
+                return s
+
+            df[col] = df[col].apply(clean_val).astype('string')
     return df
 
-def extract_and_export_table(engine, table_name, bucket_name, prefix, batch_size=1000):
-    """Extrai dados com paginação nativa SQL (LIMIT/OFFSET) e grava incrementalmente no Parquet."""
+def extract_and_export_table(engine, table_name, bucket_name, prefix, default_batch=1000):
+    """Extrai dados com paginação nativa SQL e grava incrementalmente no Parquet."""
     temp_file = f"/tmp/{table_name}.parquet"
     
     if os.path.exists(temp_file):
@@ -58,6 +69,8 @@ def extract_and_export_table(engine, table_name, bucket_name, prefix, batch_size
         except Exception:
             pass
 
+    # Para tabelas muito pesadas como spans, usa lotes menores de 250 registros
+    batch_size = 250 if table_name in ("spans", "inputs", "trace_info") else default_batch
     writer = None
     offset = 0
     total_rows = 0
@@ -84,23 +97,21 @@ def extract_and_export_table(engine, table_name, bucket_name, prefix, batch_size
             if chunk.empty:
                 break
 
-            # Sanitiza o lote atual
+            # Sanitiza e limita tamanho de strings gigantescas
             chunk_sanitized = sanitize_df_for_parquet(chunk)
             table_arrow = pa.Table.from_pandas(chunk_sanitized, preserve_index=False)
 
-            # Inicializa o escritor Parquet garantindo que nenhuma coluna seja pa.null()
+            # Inicializa o escritor Parquet no primeiro lote
             if writer is None:
                 fields = []
                 for field in table_arrow.schema:
                     if field.type == pa.null():
-                        # Substitui colunas totalmente nulas no 1º lote por string/double
                         fields.append(pa.field(field.name, pa.string()))
                     else:
                         fields.append(field)
                 writer_schema = pa.schema(fields)
                 writer = pq.ParquetWriter(temp_file, writer_schema, compression='snappy')
 
-            # Faz o cast seguro do lote atual para o schema fixo do arquivo
             try:
                 table_to_write = table_arrow.cast(writer_schema, safe=False)
             except Exception:
@@ -110,7 +121,7 @@ def extract_and_export_table(engine, table_name, bucket_name, prefix, batch_size
             total_rows += len(chunk)
             offset += batch_size
 
-            if total_rows % 5000 == 0 or total_rows < 5000 or total_rows >= total_in_db:
+            if total_rows % 2500 == 0 or total_rows < 1000 or total_rows >= total_in_db:
                 logger.info(f"Progresso {table_name}: {total_rows}/{total_in_db} linhas...")
 
             # Libera memória imediatamente
