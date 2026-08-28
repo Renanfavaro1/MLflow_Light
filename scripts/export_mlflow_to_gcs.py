@@ -48,7 +48,7 @@ def sanitize_df_for_parquet(df):
             )
     return df
 
-def extract_and_export_table(engine, table_name, bucket_name, prefix, chunksize=1000):
+def extract_and_export_table(engine, table_name, bucket_name, prefix, chunksize=2500):
     """Extrai dados em streaming (chunks) e grava incrementalmente no Parquet com consumo mínimo de RAM."""
     logger.info(f"Extraindo dados de: {table_name} (modo streaming de {chunksize} linhas)...")
     temp_file = f"/tmp/{table_name}.parquet"
@@ -71,7 +71,7 @@ def extract_and_export_table(engine, table_name, bucket_name, prefix, chunksize=
                 if chunk.empty:
                     continue
                 
-                # Sanitiza apenas o lote atual de 1.000 linhas
+                # Sanitiza apenas o lote atual de linhas
                 chunk_sanitized = sanitize_df_for_parquet(chunk)
                 table_arrow = pa.Table.from_pandas(chunk_sanitized, preserve_index=False)
                 
@@ -81,6 +81,9 @@ def extract_and_export_table(engine, table_name, bucket_name, prefix, chunksize=
                 
                 writer.write_table(table_arrow)
                 total_rows += len(chunk)
+                
+                if total_rows % 5000 == 0 or total_rows < 5000:
+                    logger.info(f"Progresso {table_name}: {total_rows} linhas processadas...")
                 
                 # Libera o lote imediatamente da memória RAM
                 del chunk

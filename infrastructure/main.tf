@@ -120,6 +120,8 @@ resource "google_cloud_run_v2_job" "etl_job" {
   project  = var.project_id
 
   template {
+    timeout = "1800s"
+
     template {
       service_account = google_service_account.etl_job_sa.email
       
@@ -134,7 +136,7 @@ resource "google_cloud_run_v2_job" "etl_job" {
         resources {
           limits = {
             cpu    = "2"
-            memory = "2Gi"
+            memory = "4Gi"
           }
         }
 
