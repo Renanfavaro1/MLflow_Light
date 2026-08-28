@@ -2,24 +2,47 @@
 
 > **Repositório**: [https://github.com/Renanfavaro1/MLflow_Light.git](https://github.com/Renanfavaro1/MLflow_Light.git)
 
-Implementação completa do MLflow na Light utilizando a arquitetura **Remote Tracking with Server**, hospedado inteiramente no Google Cloud Platform. 
+Implementação corporativa do MLflow na Light utilizando a arquitetura **Remote Tracking with Server**, hospedado no Google Cloud Platform.
 
 O sistema atende a dois cenários principais da Light:
-1. **Modelos de ML tradicionais** — treinamento, avaliação, versionamento de modelos (sklearn, XGBoost, etc.)
-2. **Softwares com Foundation Models via API** — tracking de chamadas a LLMs (Gemini, OpenAI, etc.), prompts, tokens, latência e custos, incluindo frameworks de avaliação como LLM as a Judge e Spans para pipelines complexos (RAG, Agentes).
+1. **Modelos de ML tradicionais** — treinamento, avaliação, versionamento de modelos (Scikit-Learn, XGBoost, etc.)
+2. **Softwares com Foundation Models (GenAI)** — tracking de chamadas a LLMs (Gemini, Vertex AI, OpenAI, Claude), prompts, tokens, latência, custos e árvore hierárquica de Spans (RAGs e Agentes Autônomos).
 
-## Estrutura do Repositório
+---
 
-- `infrastructure/`: Configurações do Terraform para provisionar Cloud SQL, Cloud Storage, Cloud Run, VPC, IAM, etc.
+## 🏗️ Estrutura do Repositório
+
+- `infrastructure/`: Configurações Terraform para provisionar Cloud SQL, Cloud Storage, Cloud Run, VPC, IAM e Secret Manager.
 - `server/`: Container Docker customizado para rodar o MLflow Tracking Server conectado aos serviços GCP.
-- `sdk/`: Pacote Python `light-mlflow` contendo decorators simplificados e integrações específicas para os times da Light.
-- `sdk-node/`: Pacote Node.js (TypeScript/JS) contendo wrappers e funções para integração com aplicações web e backends JS.
-- `examples/`: Exemplos práticos de uso do SDK e tracking de experimentos.
-- `docs/`: Documentação detalhada sobre arquitetura, setup e guias de uso.
+- `sdk/`: Pacote Python `light-mlflow` contendo decoradores (`@track_pipeline`, `@llm_span`, `@tool_span`), cálculo automático de tokens/custos e resiliência fail-safe.
+- `sdk-node/`: Pacote Node.js/TypeScript `light-mlflow-node` para backends JavaScript (Express, NestJS, etc.).
+- `scripts/`: Pipeline ETL de extração otimizada do PostgreSQL para Parquet no GCS (integrado ao Databricks / Unity Catalog).
+- `examples/`: Exemplos práticos de uso do SDK para ML e GenAI.
+- `docs/`: Guias detalhados de setup, arquitetura e integração para Agentes de IA.
 
-## Autenticação
-O acesso ao Tracking Server do MLflow é livre para a rede interna da Light. **Nenhuma autenticação (como IAP, Firebase ou Basic Auth) é exigida para os Cientistas de Dados** ou aplicações que logam as métricas via SDK. Toda a responsabilidade de acesso seguro aos recursos do GCP (Cloud SQL e Storage) fica a cargo exclusivo do MLflow Server via IAM (Service Accounts).
+---
 
-## Requisitos para os Usuários (Projetos e Assistentes)
-- Python 3.9+ ou Node.js (se usar o SDK JS)
-- Git (para baixar o pacote)
+## 🔐 Autenticação & Variáveis de Ambiente
+
+Para conectar qualquer aplicação ou notebook ao MLflow da Light, defina as variáveis de ambiente:
+
+| Variável | Descrição | Exemplo |
+|---|---|---|
+| `MLFLOW_TRACKING_URI` | URL oficial do Tracking Server | `https://mlflow-tracking-server-504082412074.us-central1.run.app` |
+| `MLFLOW_TRACKING_TOKEN` | Token corporativo de autenticação | Recuperado do GCP Secret Manager (`mlflow-api-token`) |
+
+> 🛡️ **Arquitetura Fail-Safe**: Caso o token não seja fornecido ou o servidor de tracking esteja inacessível, as aplicações e Agentes de IA **continuam funcionando normalmente**. A telemetria nunca interrompe a resposta ao usuário final.
+
+---
+
+## 📦 Instalação Rápida
+
+### Python
+```bash
+pip install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk
+```
+
+### Node.js
+```bash
+npm install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk-node
+```

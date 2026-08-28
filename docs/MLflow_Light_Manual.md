@@ -22,27 +22,50 @@
 
 > **Repositório**: [https://github.com/Renanfavaro1/MLflow_Light.git](https://github.com/Renanfavaro1/MLflow_Light.git)
 
-Implementação completa do MLflow na Light utilizando a arquitetura **Remote Tracking with Server**, hospedado inteiramente no Google Cloud Platform. 
+Implementação corporativa do MLflow na Light utilizando a arquitetura **Remote Tracking with Server**, hospedado no Google Cloud Platform.
 
 O sistema atende a dois cenários principais da Light:
-1. **Modelos de ML tradicionais** — treinamento, avaliação, versionamento de modelos (sklearn, XGBoost, etc.)
-2. **Softwares com Foundation Models via API** — tracking de chamadas a LLMs (Gemini, OpenAI, etc.), prompts, tokens, latência e custos, incluindo frameworks de avaliação como LLM as a Judge e Spans para pipelines complexos (RAG, Agentes).
+1. **Modelos de ML tradicionais** — treinamento, avaliação, versionamento de modelos (Scikit-Learn, XGBoost, etc.)
+2. **Softwares com Foundation Models (GenAI)** — tracking de chamadas a LLMs (Gemini, Vertex AI, OpenAI, Claude), prompts, tokens, latência, custos e árvore hierárquica de Spans (RAGs e Agentes Autônomos).
 
-## Estrutura do Repositório
+---
 
-- `infrastructure/`: Configurações do Terraform para provisionar Cloud SQL, Cloud Storage, Cloud Run, VPC, IAM, etc.
+## 🏗️ Estrutura do Repositório
+
+- `infrastructure/`: Configurações Terraform para provisionar Cloud SQL, Cloud Storage, Cloud Run, VPC, IAM e Secret Manager.
 - `server/`: Container Docker customizado para rodar o MLflow Tracking Server conectado aos serviços GCP.
-- `sdk/`: Pacote Python `light-mlflow` contendo decorators simplificados e integrações específicas para os times da Light.
-- `sdk-node/`: Pacote Node.js (TypeScript/JS) contendo wrappers e funções para integração com aplicações web e backends JS.
-- `examples/`: Exemplos práticos de uso do SDK e tracking de experimentos.
-- `docs/`: Documentação detalhada sobre arquitetura, setup e guias de uso.
+- `sdk/`: Pacote Python `light-mlflow` contendo decoradores (`@track_pipeline`, `@llm_span`, `@tool_span`), cálculo automático de tokens/custos e resiliência fail-safe.
+- `sdk-node/`: Pacote Node.js/TypeScript `light-mlflow-node` para backends JavaScript (Express, NestJS, etc.).
+- `scripts/`: Pipeline ETL de extração otimizada do PostgreSQL para Parquet no GCS (integrado ao Databricks / Unity Catalog).
+- `examples/`: Exemplos práticos de uso do SDK para ML e GenAI.
+- `docs/`: Guias detalhados de setup, arquitetura e integração para Agentes de IA.
 
-## Autenticação
-O acesso ao Tracking Server do MLflow é livre para a rede interna da Light. **Nenhuma autenticação (como IAP, Firebase ou Basic Auth) é exigida para os Cientistas de Dados** ou aplicações que logam as métricas via SDK. Toda a responsabilidade de acesso seguro aos recursos do GCP (Cloud SQL e Storage) fica a cargo exclusivo do MLflow Server via IAM (Service Accounts).
+---
 
-## Requisitos para os Usuários (Projetos e Assistentes)
-- Python 3.9+ ou Node.js (se usar o SDK JS)
-- Git (para baixar o pacote)
+## 🔐 Autenticação & Variáveis de Ambiente
+
+Para conectar qualquer aplicação ou notebook ao MLflow da Light, defina as variáveis de ambiente:
+
+| Variável | Descrição | Exemplo |
+|---|---|---|
+| `MLFLOW_TRACKING_URI` | URL oficial do Tracking Server | `https://mlflow-tracking-server-504082412074.us-central1.run.app` |
+| `MLFLOW_TRACKING_TOKEN` | Token corporativo de autenticação | Recuperado do GCP Secret Manager (`mlflow-api-token`) |
+
+> 🛡️ **Arquitetura Fail-Safe**: Caso o token não seja fornecido ou o servidor de tracking esteja inacessível, as aplicações e Agentes de IA **continuam funcionando normalmente**. A telemetria nunca interrompe a resposta ao usuário final.
+
+---
+
+## 📦 Instalação Rápida
+
+### Python
+```bash
+pip install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk
+```
+
+### Node.js
+```bash
+npm install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk-node
+```
 
 
 ---
@@ -50,42 +73,62 @@ O acesso ao Tracking Server do MLflow é livre para a rede interna da Light. **N
 # Guia de Setup - MLflow Light
 
 ## 1. Instalando o SDK
-Para que os cientistas de dados possam usar as funções do MLflow nos seus códigos locais ou nos notebooks (Jupyter/Colab):
+
+Para usar as funções do MLflow nos seus códigos locais, aplicações ou notebooks (Jupyter/Colab):
+
+### Python:
 ```bash
 pip install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk
 ```
 
-## 2. Configurando o Ambiente
-Como o servidor MLflow está rodando na nuvem, você deve apontar o seu código para a URL oficial da Light:
+### Node.js:
+```bash
+npm install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk-node
+```
 
-**Linux/Mac:**
+---
+
+## 2. Configurando as Variáveis de Ambiente
+
+Para enviar métricas e traces para o servidor oficial da Light, configure a URI e o Token corporativo:
+
+### Linux / macOS:
 ```bash
 export MLFLOW_TRACKING_URI="https://mlflow-tracking-server-504082412074.us-central1.run.app"
+export MLFLOW_TRACKING_TOKEN="28684e077978582afa70be269dbdac57544aae36fb051fa3dc049f2e1c7defd0"
 ```
 
-**Windows (PowerShell):**
+### Windows (PowerShell):
 ```powershell
 $env:MLFLOW_TRACKING_URI="https://mlflow-tracking-server-504082412074.us-central1.run.app"
+$env:MLFLOW_TRACKING_TOKEN="28684e077978582afa70be269dbdac57544aae36fb051fa3dc049f2e1c7defd0"
 ```
 
-Se estiver rodando o código sem essa variável configurada, os rastreamentos salvarão os arquivos na sua máquina local de forma indesejada.
+### Docker / Arquivo `.env`:
+```env
+MLFLOW_TRACKING_URI=https://mlflow-tracking-server-504082412074.us-central1.run.app
+MLFLOW_TRACKING_TOKEN=28684e077978582afa70be269dbdac57544aae36fb051fa3dc049f2e1c7defd0
+```
+
+> 💡 **Nota de Segurança**: No GCP Cloud Run, o token pode ser injetado automaticamente via Secret Manager referenciando o secret `mlflow-api-token`.
 
 
 ---
 
 # Arquitetura do MLflow na Light
 
-O MLflow na Light segue a arquitetura **Remote Tracking with Server** hospedado no GCP.
+O MLflow na Light segue a arquitetura **Remote Tracking with Server** hospedado inteiramente no GCP.
 
 ## Componentes:
-1. **Cloud Run (Server)**: Hospeda a UI e a API do MLflow. Configurado com acesso público para as redes permitidas, atuando como único gateway para o backend de metadados e armazenamento.
-2. **Cloud SQL (PostgreSQL)**: Armazena os metadados (Runs, Parâmetros, Métricas, Tags). Não possui IP público e é acessado via Serverless VPC Access.
-3. **Cloud Storage (GCS)**: Armazena os artefatos pesados (Arquivos `.pkl`, imagens, JSONs).
+1. **Cloud Run (Server)**: Hospeda a UI e a API do MLflow. Atua como o gateway central para o backend de metadados e armazenamento de artefatos.
+2. **Cloud SQL (PostgreSQL)**: Armazena os metadados (Runs, Parâmetros, Métricas, Tags, Spans e Traces de GenAI). Não possui IP público e é acessado via Serverless VPC Access.
+3. **Cloud Storage (GCS)**: Armazena os artefatos pesados (Arquivos `.pkl`, imagens, JSONs, exports Parquet para o Databricks).
+4. **Secret Manager**: Armazena com segurança a connection string do banco de dados e o token corporativo de acesso (`mlflow-api-token`).
 
-## Segurança
-- O Cloud Run não injeta a senha do banco em texto limpo nas variáveis de ambiente. Ele resolve a connection string diretamente do **Secret Manager**.
-- O acesso de rede entre o Cloud Run e o Banco é feito inteiramente por tráfego interno do GCP (VPC).
-- Todo o acesso aos recursos do GCP (GCS e Cloud SQL) é abstraído pelo Cloud Run. Os usuários e cientistas de dados interagem com a interface web ou com a API utilizando apenas a URL final, sem necessidade de autenticação (Firebase/IAP) ou contas GCP.
+## Segurança e Resiliência
+- **Autenticação Universal via Token**: Aplicações e notebooks conectam-se via `MLFLOW_TRACKING_TOKEN`, permitindo integração segura a partir do GCP, outras nuvens ou on-premise.
+- **VPC Privada**: O tráfego entre o Cloud Run e o Cloud SQL ocorre 100% dentro da VPC interna da Google, sem exposição a IPs públicos de banco de dados.
+- **Arquitetura Fail-Safe**: Se o servidor de tracking ou o token falharem, o SDK da Light não interrompe o fluxo de negócios das aplicações e chatbots de IA.
 
 
 ---
@@ -191,72 +234,107 @@ O MLflow criará automaticamente um Span chamado `llm_judge_relevance`, salvará
 # Integração Light MLflow para Agentes Autônomos
 
 ## 📌 Objetivo
-Este guia serve como a principal base de conhecimento para o Antigravity (ou outras IAs) aprenderem a integrar o SDK padrão de Observabilidade da Light (`light_mlflow`) em novos projetos de Agentes de IA, RAGs e orquestradores.
+Este guia serve como a principal base de conhecimento para o Antigravity (e desenvolvedores de IA) aprenderem a integrar o SDK padrão de Observabilidade da Light (`light_mlflow`) em novos projetos de Agentes de IA, RAGs e orquestradores.
+
+---
 
 ## 📦 1. Dependência e Instalação
-Ao criar ou atualizar um projeto Python, o pacote do MLflow da Light deve ser inserido no arquivo `requirements.txt` utilizando o repositório Git:
+
+Ao criar ou atualizar um projeto Python, adicione o pacote ao `requirements.txt`:
 
 ```text
 # Adicionar no requirements.txt
 light-mlflow @ git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk
 ```
 
-## ⚙️ 2. Configuração no Código (Startup)
-Em todo novo projeto (seja FastAPI, Flask, ou scripts batch), o MLflow deve ser inicializado **uma única vez** no startup da aplicação, antes de qualquer execução de IA:
+---
+
+## 🔐 2. Autenticação e Configuração de Ambiente
+
+Toda aplicação deve possuir as seguintes variáveis de ambiente configuradas no deploy (Cloud Run, Docker, Kubernetes ou `.env` local):
+
+```bash
+# URL do Servidor Central MLflow
+MLFLOW_TRACKING_URI="https://mlflow-tracking-server-504082412074.us-central1.run.app"
+
+# Token Corporativo de Acesso (Armazenado no Secret Manager como 'mlflow-api-token')
+MLFLOW_TRACKING_TOKEN="28684e077978582afa70be269dbdac57544aae36fb051fa3dc049f2e1c7defd0"
+```
+
+No **Cloud Run**, você pode vincular o secret diretamente via flag:
+```bash
+gcloud run services update NOME_DO_SERVICO \
+  --set-env-vars="MLFLOW_TRACKING_URI=https://mlflow-tracking-server-504082412074.us-central1.run.app" \
+  --set-secrets="MLFLOW_TRACKING_TOKEN=mlflow-api-token:latest" \
+  --region=us-central1
+```
+
+> 🛡️ **Resiliência Fail-Safe:** O SDK da Light foi projetado com isolamento de falhas. Se o token não for configurado ou o MLflow estiver temporariamente inacessível, **a aplicação continuará respondendo aos usuários normalmente**, apenas sem gravar os traces.
+
+---
+
+## ⚙️ 3. Inicialização no Código (Startup)
+
+Em todo novo projeto (FastAPI, Flask, scripts ou jobs batch), o MLflow deve ser inicializado **uma única vez** no startup da aplicação, antes de qualquer execução de IA:
 
 ```python
 from light_mlflow import LightMLflowConfig
 
-# A URI de conexão com o banco/servidor será injetada automaticamente 
-# pelas variáveis de ambiente do Cloud Run (MLFLOW_TRACKING_URI).
+# Inicialização limpa: lê URI e TOKEN automaticamente das variáveis de ambiente
 LightMLflowConfig.setup(experiment_name="Nome_do_Projeto_Novo")
 ```
 
-## 🔍 3. Rastreamento Nativo (Traces) para Agentes
-Para fluxos agenticos e RAGs, a IA desenvolvedora deve utilizar **EXCLUSIVAMENTE** a arquitetura de `spans` baseada em decoradores. Isso fará com que o painel do MLflow gere uma árvore visual detalhada (Traces) mostrando latência, prompts e ferramentas acionadas.
+---
+
+## 🔍 4. Rastreamento Nativo (Traces) para Agentes
+
+Para fluxos agenticos e RAGs, utilize **EXCLUSIVAMENTE** a arquitetura de `spans` baseada em decoradores. Isso gera uma árvore visual detalhada (Traces) no painel do MLflow mostrando latência, prompts, respostas, tokens, custos e ferramentas acionadas.
 
 ### Importação Padrão:
 ```python
 from light_mlflow.decorators import track_pipeline, agent_span, tool_span, llm_span, retriever_span
 ```
 
-### Regras Estritas de Aplicação (Para a IA Desenvolvedora)
-1. **`@track_pipeline(run_name="...")`**: DEVE ser colocado apenas na **função principal** ou endpoint de entrada (ex: `chat()`, `main()`). Ele é o orquestrador que abre a gravação. Não use `mlflow.start_run()` manualmente.
-2. **`@retriever_span(name="...")`**: Obrigatório em funções de busca (Elasticsearch, Pinecone, buscas em banco de dados para RAG).
-3. **`@llm_span(name="...")`**: Obrigatório nas funções que enviam o prompt e recebem a resposta do provedor de IA (Gemini, VertexAI, OpenAI).
-4. **`@tool_span(name="...")`**: Obrigatório em qualquer ferramenta consumida pelo Agente (ex: consultar_saldo_sap, buscar_clima).
-5. **`@agent_span(name="...")`**: Opcional, usado para encapsular a lógica de raciocínio interno/loops de agentes ReAct.
+### Regras Estritas de Aplicação
+1. **`@track_pipeline(run_name="...")`**: DEVE ser colocado apenas na **função principal** ou endpoint de entrada (ex: `chat()`, `processar_mensagem()`). Ele é o orquestrador que abre a gravação. Não use `mlflow.start_run()` manualmente.
+2. **`@retriever_span(name="...")`**: Obrigatório em funções de busca de contexto (Elasticsearch, Pinecone, bancos vetoriais, buscas SQL para RAG).
+3. **`@llm_span(name="...")`**: Obrigatório nas funções que enviam o prompt e recebem a resposta do provedor de IA (Gemini, Vertex AI, OpenAI, Claude). Os tokens e custos são computados automaticamente.
+4. **`@tool_span(name="...")`**: Obrigatório em qualquer ferramenta consumida pelo Agente (ex: `consultar_saldo_sap`, `buscar_clima`).
+5. **`@agent_span(name="...")`**: Opcional, usado para encapsular loops de raciocínio de agentes ReAct.
 
-### Exemplo Arquitetural a Ser Seguido
+### Exemplo Arquitetural Completo:
 ```python
-from light_mlflow.decorators import track_pipeline, tool_span, llm_span
+from light_mlflow.decorators import track_pipeline, tool_span, llm_span, retriever_span
+
+@retriever_span(name="Buscar_Documentos_Normas")
+def buscar_normas(query: str):
+    # Lógica de busca vetorial / RAG
+    return ["Norma 123: Procedimentos de Medição", "Norma 456: Redes"]
 
 @tool_span(name="Consultar_Faturas_SAP")
-def buscar_faturas(cpf):
-    # Lógica de integração externa
+def buscar_faturas(cpf: str):
+    # Integração com API externa
     return f"Faturas abertas para {cpf}: R$ 150,00"
 
 @llm_span(name="Gemini_Gerador_Resposta")
-def gerar_resposta_ao_cliente(contexto, pergunta):
-    # Inferência LLM
-    return f"Baseado no sistema: {contexto}"
+def gerar_resposta_ao_cliente(contexto: str, pergunta: str):
+    # Chamada ao SDK do Google Gemini
+    return f"Baseado nas informações: {contexto}"
 
 @track_pipeline(run_name="Atendimento_Cliente_Fluxo")
-def processar_mensagem(pergunta, cpf):
-    contexto = buscar_faturas(cpf)
+def processar_mensagem(pergunta: str, cpf: str):
+    docs = buscar_normas(pergunta)
+    faturas = buscar_faturas(cpf)
+    contexto = f"{docs}\n{faturas}"
     resposta = gerar_resposta_ao_cliente(contexto, pergunta)
     return resposta
 ```
 
-## 🚨 Atenção (Avisos Críticos de Arquitetura)
-- **Não misturar abordagens**: NUNCA utilize o antigo `@track_llm_call` em projetos com Agentes, pois ele não gera a árvore hierárquica na aba Traces.
-- **Evite hardcode de URLs**: Nunca defina a `tracking_uri` manualmente no código. Deixe o SDK ler da variável de ambiente gerenciada pelo Terraform/Cloud Run.
-- **Segurança de SSL**: Em caso de avisos de `InsecureRequestWarning` devido à rede interna da Light, não desative os warnings no código do agente (deixe isso para a camada de infra/Docker se necessário, ou garanta que o CA corporativo esteja instalado).
-
 ---
 
-## 🟢 4. Integração Node.js / TypeScript (Apenas Backend)
-Se o projeto de destino for em Node.js (ex: Express, NestJS, Vite SSR), o MLflow deve ser integrado usando o pacote NPM centralizado da Light. O SDK Javascript utiliza *Wrappers* e *AsyncLocalStorage* em vez de decoradores.
+## 🟢 5. Integração Node.js / TypeScript (Apenas Backend)
+
+Se o projeto for em Node.js (ex: Express, NestJS, Vite SSR), use o pacote `light-mlflow-node`.
 
 ### Instalação (package.json):
 ```json
@@ -265,16 +343,15 @@ Se o projeto de destino for em Node.js (ex: Express, NestJS, Vite SSR), o MLflow
 }
 ```
 
-### Configuração Inicial (Index.js / Main.js)
+### Configuração Inicial (Index.js / Main.js):
 ```javascript
 import { LightMLflowConfig } from 'light-mlflow-node';
-// A URI é lida automaticamente do process.env.MLFLOW_TRACKING_URI
+
+// Lê automaticamente MLFLOW_TRACKING_URI e MLFLOW_TRACKING_TOKEN do ambiente
 await LightMLflowConfig.setup("Nome_do_Projeto_Node");
 ```
 
-### Rastreamento de LLMs em Node.js
-Use as funções `trackPipeline` e `llmSpan` para englobar a lógica. A extração de tokens é automática se a função retornar objetos da OpenAI ou `@google/genai` (Node.js).
-
+### Rastreamento de LLMs em Node.js:
 ```javascript
 import { trackPipeline, llmSpan } from 'light-mlflow-node';
 

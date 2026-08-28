@@ -1,72 +1,107 @@
 # Integração Light MLflow para Agentes Autônomos
 
 ## 📌 Objetivo
-Este guia serve como a principal base de conhecimento para o Antigravity (ou outras IAs) aprenderem a integrar o SDK padrão de Observabilidade da Light (`light_mlflow`) em novos projetos de Agentes de IA, RAGs e orquestradores.
+Este guia serve como a principal base de conhecimento para o Antigravity (e desenvolvedores de IA) aprenderem a integrar o SDK padrão de Observabilidade da Light (`light_mlflow`) em novos projetos de Agentes de IA, RAGs e orquestradores.
+
+---
 
 ## 📦 1. Dependência e Instalação
-Ao criar ou atualizar um projeto Python, o pacote do MLflow da Light deve ser inserido no arquivo `requirements.txt` utilizando o repositório Git:
+
+Ao criar ou atualizar um projeto Python, adicione o pacote ao `requirements.txt`:
 
 ```text
 # Adicionar no requirements.txt
 light-mlflow @ git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk
 ```
 
-## ⚙️ 2. Configuração no Código (Startup)
-Em todo novo projeto (seja FastAPI, Flask, ou scripts batch), o MLflow deve ser inicializado **uma única vez** no startup da aplicação, antes de qualquer execução de IA:
+---
+
+## 🔐 2. Autenticação e Configuração de Ambiente
+
+Toda aplicação deve possuir as seguintes variáveis de ambiente configuradas no deploy (Cloud Run, Docker, Kubernetes ou `.env` local):
+
+```bash
+# URL do Servidor Central MLflow
+MLFLOW_TRACKING_URI="https://mlflow-tracking-server-504082412074.us-central1.run.app"
+
+# Token Corporativo de Acesso (Armazenado no Secret Manager como 'mlflow-api-token')
+MLFLOW_TRACKING_TOKEN="28684e077978582afa70be269dbdac57544aae36fb051fa3dc049f2e1c7defd0"
+```
+
+No **Cloud Run**, você pode vincular o secret diretamente via flag:
+```bash
+gcloud run services update NOME_DO_SERVICO \
+  --set-env-vars="MLFLOW_TRACKING_URI=https://mlflow-tracking-server-504082412074.us-central1.run.app" \
+  --set-secrets="MLFLOW_TRACKING_TOKEN=mlflow-api-token:latest" \
+  --region=us-central1
+```
+
+> 🛡️ **Resiliência Fail-Safe:** O SDK da Light foi projetado com isolamento de falhas. Se o token não for configurado ou o MLflow estiver temporariamente inacessível, **a aplicação continuará respondendo aos usuários normalmente**, apenas sem gravar os traces.
+
+---
+
+## ⚙️ 3. Inicialização no Código (Startup)
+
+Em todo novo projeto (FastAPI, Flask, scripts ou jobs batch), o MLflow deve ser inicializado **uma única vez** no startup da aplicação, antes de qualquer execução de IA:
 
 ```python
 from light_mlflow import LightMLflowConfig
 
-# A URI de conexão com o banco/servidor será injetada automaticamente 
-# pelas variáveis de ambiente do Cloud Run (MLFLOW_TRACKING_URI).
+# Inicialização limpa: lê URI e TOKEN automaticamente das variáveis de ambiente
 LightMLflowConfig.setup(experiment_name="Nome_do_Projeto_Novo")
 ```
 
-## 🔍 3. Rastreamento Nativo (Traces) para Agentes
-Para fluxos agenticos e RAGs, a IA desenvolvedora deve utilizar **EXCLUSIVAMENTE** a arquitetura de `spans` baseada em decoradores. Isso fará com que o painel do MLflow gere uma árvore visual detalhada (Traces) mostrando latência, prompts e ferramentas acionadas.
+---
+
+## 🔍 4. Rastreamento Nativo (Traces) para Agentes
+
+Para fluxos agenticos e RAGs, utilize **EXCLUSIVAMENTE** a arquitetura de `spans` baseada em decoradores. Isso gera uma árvore visual detalhada (Traces) no painel do MLflow mostrando latência, prompts, respostas, tokens, custos e ferramentas acionadas.
 
 ### Importação Padrão:
 ```python
 from light_mlflow.decorators import track_pipeline, agent_span, tool_span, llm_span, retriever_span
 ```
 
-### Regras Estritas de Aplicação (Para a IA Desenvolvedora)
-1. **`@track_pipeline(run_name="...")`**: DEVE ser colocado apenas na **função principal** ou endpoint de entrada (ex: `chat()`, `main()`). Ele é o orquestrador que abre a gravação. Não use `mlflow.start_run()` manualmente.
-2. **`@retriever_span(name="...")`**: Obrigatório em funções de busca (Elasticsearch, Pinecone, buscas em banco de dados para RAG).
-3. **`@llm_span(name="...")`**: Obrigatório nas funções que enviam o prompt e recebem a resposta do provedor de IA (Gemini, VertexAI, OpenAI).
-4. **`@tool_span(name="...")`**: Obrigatório em qualquer ferramenta consumida pelo Agente (ex: consultar_saldo_sap, buscar_clima).
-5. **`@agent_span(name="...")`**: Opcional, usado para encapsular a lógica de raciocínio interno/loops de agentes ReAct.
+### Regras Estritas de Aplicação
+1. **`@track_pipeline(run_name="...")`**: DEVE ser colocado apenas na **função principal** ou endpoint de entrada (ex: `chat()`, `processar_mensagem()`). Ele é o orquestrador que abre a gravação. Não use `mlflow.start_run()` manualmente.
+2. **`@retriever_span(name="...")`**: Obrigatório em funções de busca de contexto (Elasticsearch, Pinecone, bancos vetoriais, buscas SQL para RAG).
+3. **`@llm_span(name="...")`**: Obrigatório nas funções que enviam o prompt e recebem a resposta do provedor de IA (Gemini, Vertex AI, OpenAI, Claude). Os tokens e custos são computados automaticamente.
+4. **`@tool_span(name="...")`**: Obrigatório em qualquer ferramenta consumida pelo Agente (ex: `consultar_saldo_sap`, `buscar_clima`).
+5. **`@agent_span(name="...")`**: Opcional, usado para encapsular loops de raciocínio de agentes ReAct.
 
-### Exemplo Arquitetural a Ser Seguido
+### Exemplo Arquitetural Completo:
 ```python
-from light_mlflow.decorators import track_pipeline, tool_span, llm_span
+from light_mlflow.decorators import track_pipeline, tool_span, llm_span, retriever_span
+
+@retriever_span(name="Buscar_Documentos_Normas")
+def buscar_normas(query: str):
+    # Lógica de busca vetorial / RAG
+    return ["Norma 123: Procedimentos de Medição", "Norma 456: Redes"]
 
 @tool_span(name="Consultar_Faturas_SAP")
-def buscar_faturas(cpf):
-    # Lógica de integração externa
+def buscar_faturas(cpf: str):
+    # Integração com API externa
     return f"Faturas abertas para {cpf}: R$ 150,00"
 
 @llm_span(name="Gemini_Gerador_Resposta")
-def gerar_resposta_ao_cliente(contexto, pergunta):
-    # Inferência LLM
-    return f"Baseado no sistema: {contexto}"
+def gerar_resposta_ao_cliente(contexto: str, pergunta: str):
+    # Chamada ao SDK do Google Gemini
+    return f"Baseado nas informações: {contexto}"
 
 @track_pipeline(run_name="Atendimento_Cliente_Fluxo")
-def processar_mensagem(pergunta, cpf):
-    contexto = buscar_faturas(cpf)
+def processar_mensagem(pergunta: str, cpf: str):
+    docs = buscar_normas(pergunta)
+    faturas = buscar_faturas(cpf)
+    contexto = f"{docs}\n{faturas}"
     resposta = gerar_resposta_ao_cliente(contexto, pergunta)
     return resposta
 ```
 
-## 🚨 Atenção (Avisos Críticos de Arquitetura)
-- **Não misturar abordagens**: NUNCA utilize o antigo `@track_llm_call` em projetos com Agentes, pois ele não gera a árvore hierárquica na aba Traces.
-- **Evite hardcode de URLs**: Nunca defina a `tracking_uri` manualmente no código. Deixe o SDK ler da variável de ambiente gerenciada pelo Terraform/Cloud Run.
-- **Segurança de SSL**: Em caso de avisos de `InsecureRequestWarning` devido à rede interna da Light, não desative os warnings no código do agente (deixe isso para a camada de infra/Docker se necessário, ou garanta que o CA corporativo esteja instalado).
-
 ---
 
-## 🟢 4. Integração Node.js / TypeScript (Apenas Backend)
-Se o projeto de destino for em Node.js (ex: Express, NestJS, Vite SSR), o MLflow deve ser integrado usando o pacote NPM centralizado da Light. O SDK Javascript utiliza *Wrappers* e *AsyncLocalStorage* em vez de decoradores.
+## 🟢 5. Integração Node.js / TypeScript (Apenas Backend)
+
+Se o projeto for em Node.js (ex: Express, NestJS, Vite SSR), use o pacote `light-mlflow-node`.
 
 ### Instalação (package.json):
 ```json
@@ -75,16 +110,15 @@ Se o projeto de destino for em Node.js (ex: Express, NestJS, Vite SSR), o MLflow
 }
 ```
 
-### Configuração Inicial (Index.js / Main.js)
+### Configuração Inicial (Index.js / Main.js):
 ```javascript
 import { LightMLflowConfig } from 'light-mlflow-node';
-// A URI é lida automaticamente do process.env.MLFLOW_TRACKING_URI
+
+// Lê automaticamente MLFLOW_TRACKING_URI e MLFLOW_TRACKING_TOKEN do ambiente
 await LightMLflowConfig.setup("Nome_do_Projeto_Node");
 ```
 
-### Rastreamento de LLMs em Node.js
-Use as funções `trackPipeline` e `llmSpan` para englobar a lógica. A extração de tokens é automática se a função retornar objetos da OpenAI ou `@google/genai` (Node.js).
-
+### Rastreamento de LLMs em Node.js:
 ```javascript
 import { trackPipeline, llmSpan } from 'light-mlflow-node';
 
