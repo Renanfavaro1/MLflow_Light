@@ -1,47 +1,60 @@
 import os
 import base64
-from flask import request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "light")
 BASIC_AUTH_PASS = os.environ.get("BASIC_AUTH_PASS", "Light@2026")
 
-def create_app(app=None):
-    """
-    MLflow App Plugin Factory.
-    Attaches authentication to the native MLflow Flask application.
-    """
-    if app is None:
-        from mlflow.server import app as mlflow_app
-        app = mlflow_app
+class LightAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        # 1. Healthcheck probes do Cloud Run
+        if request.url.path in ("/health", "/version"):
+            return await call_next(request)
 
-    @app.before_request
-    def check_light_auth():
-        # Permite healthcheck do Cloud Run sem autenticação
-        if request.path in ("/health", "/version"):
-            return None
+        auth_header = request.headers.get("authorization", "")
 
-        auth_header = request.headers.get("Authorization", "")
-
-        # 1. Agentes e Serviços que usam Bearer token (passam direto)
+        # 2. Agentes de IA com Bearer Token (passam direto)
         if auth_header.startswith("Bearer "):
-            return None
+            return await call_next(request)
 
-        # 2. Usuários humanos no navegador usando Login Light (Basic Auth)
+        # 3. Usuários no Navegador com Basic Auth (Login Light)
         if auth_header.startswith("Basic "):
             try:
                 encoded = auth_header.split(" ", 1)[1]
                 decoded = base64.b64decode(encoded).decode("utf-8")
                 user, pwd = decoded.split(":", 1)
                 if user == BASIC_AUTH_USER and pwd == BASIC_AUTH_PASS:
-                    return None
+                    return await call_next(request)
             except Exception:
                 pass
 
-        # 3. Não autenticado -> Dispara o popup nativo de login no navegador
+        # 4. Não autorizado -> Exibe tela/popup de login no navegador
         return Response(
-            "Acesso restrito - Area Light MLflow",
-            401,
-            {"WWW-Authenticate": 'Basic realm="Acesso a Area Light MLflow"'}
+            content="Acesso restrito - Area Light MLflow",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Acesso a Area Light MLflow"'}
         )
 
-    return app
+def create_app(app=None):
+    """
+    MLflow App Plugin Factory.
+    Envolve o aplicativo FastAPI/ASGI do MLflow com o middleware de autenticação.
+    """
+    if app is None:
+        try:
+            from mlflow.server.fastapi_app import app as mlflow_app
+        except ImportError:
+            from mlflow.server import app as mlflow_app
+        app = mlflow_app
+
+    if hasattr(app, "add_middleware"):
+        app.add_middleware(LightAuthMiddleware)
+        return app
+    else:
+        from starlette.middleware.wsgi import WSGIMiddleware
+        from fastapi import FastAPI
+        fastapi_wrapper = FastAPI()
+        fastapi_wrapper.add_middleware(LightAuthMiddleware)
+        fastapi_wrapper.mount("/", WSGIMiddleware(app))
+        return fastapi_wrapper
