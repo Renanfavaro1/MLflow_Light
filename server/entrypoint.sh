@@ -14,22 +14,13 @@ export MLFLOW_SQLALCHEMYSTORE_MAX_OVERFLOW=20
 # serão injetadas pelo Cloud Run no momento da execução, utilizando
 # Secret Manager e definições da infraestrutura do Terraform.
 
-echo "Starting MLflow Server (Internal on port 5001)..."
-# Roda o MLflow internamente no localhost em background com 2 workers
+echo "Starting MLflow Server with Light Auth..."
+
 mlflow server \
-    --host 127.0.0.1 \
-    --port 5001 \
+    --app-name auth_wrapper:app \
+    --host 0.0.0.0 \
+    --port ${PORT:-5000} \
     --backend-store-uri "${BACKEND_STORE_URI}" \
     --default-artifact-root "${DEFAULT_ARTIFACT_ROOT}" \
     --workers 2 \
-    --uvicorn-opts "--timeout-keep-alive 120" &
-MLFLOW_PID=$!
-
-echo "Starting Light Auth Proxy on port ${PORT:-5000}..."
-# Inicia o micro-proxy Flask na frente com 2 workers para economizar memória
-gunicorn -b 0.0.0.0:${PORT:-5000} -w 2 --threads 4 auth_proxy:app &
-PROXY_PID=$!
-
-# Aguarda qualquer um dos processos encerrar. Se o MLflow crachar, o container reinicia
-wait -n $MLFLOW_PID $PROXY_PID
-exit $?
+    --uvicorn-opts "--timeout-keep-alive 120"

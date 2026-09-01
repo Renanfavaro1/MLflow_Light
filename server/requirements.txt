@@ -4,5 +4,3 @@ psycopg2-binary>=2.9.9
 google-cloud-storage>=2.13.0
 gunicorn>=21.2.0
 uvicorn>=0.20.0
-google-auth>=2.22.0
-requests>=2.31.0
