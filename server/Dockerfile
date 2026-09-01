@@ -3,14 +3,15 @@ FROM ghcr.io/mlflow/mlflow:latest
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
-# Copy and setup entrypoint script
+# Copia e instala o plugin de autenticação do MLflow
+COPY setup.py /app/setup.py
+COPY light_auth /app/light_auth
+RUN pip install --no-cache-dir -e /app
+
+# Entrypoint
 COPY entrypoint.sh /entrypoint.sh
-COPY auth_wrapper.py /auth_wrapper.py
-ENV PYTHONPATH="/"
 RUN chmod +x /entrypoint.sh
 
-# Expose MLflow port
 EXPOSE 5000
 
-# Set the entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

@@ -1,23 +1,17 @@
 #!/bin/bash
 set -e
 
-# Configuração proposital sem autenticação: O acesso já é gerenciado pelo próprio ambiente/rede, facilitando o uso pelo cientista de dados.
 unset MLFLOW_AUTH_CONFIG
 export MLFLOW_DISABLE_ENV_MANAGER_CHECK=true
 
 # Limita o número de conexões simultâneas que o container faz no Cloud SQL 
-# Otimizado para Alta Concorrência (Assistente Virtual)
 export MLFLOW_SQLALCHEMYSTORE_POOL_SIZE=10
 export MLFLOW_SQLALCHEMYSTORE_MAX_OVERFLOW=20
 
-# As variáveis de ambiente BACKEND_STORE_URI e DEFAULT_ARTIFACT_ROOT
-# serão injetadas pelo Cloud Run no momento da execução, utilizando
-# Secret Manager e definições da infraestrutura do Terraform.
+echo "Starting MLflow Server with Light Auth plugin..."
 
-echo "Starting MLflow Server with Light Auth..."
-
-mlflow server \
-    --app-name auth_wrapper:app \
+exec mlflow server \
+    --app-name light-auth \
     --host 0.0.0.0 \
     --port ${PORT:-5000} \
     --backend-store-uri "${BACKEND_STORE_URI}" \
