@@ -10,32 +10,47 @@ O sistema atende a dois cenários principais da Light:
 
 ---
 
-## 🏗️ Estrutura do Repositório
+## 🌐 Acesso à Interface Web (Área Light)
 
-- `infrastructure/`: Configurações Terraform para provisionar Cloud SQL, Cloud Storage, Cloud Run, VPC, IAM e Secret Manager.
-- `server/`: Container Docker customizado para rodar o MLflow Tracking Server conectado aos serviços GCP.
-- `sdk/`: Pacote Python `light-mlflow` contendo decoradores (`@track_pipeline`, `@llm_span`, `@tool_span`), cálculo automático de tokens/custos e resiliência fail-safe.
-- `sdk-node/`: Pacote Node.js/TypeScript `light-mlflow-node` para backends JavaScript (Express, NestJS, etc.).
-- `scripts/`: Pipeline ETL de extração otimizada do PostgreSQL para Parquet no GCS (integrado ao Databricks / Unity Catalog).
-- `examples/`: Exemplos práticos de uso do SDK para ML e GenAI.
-- `docs/`: Guias detalhados de setup, arquitetura e integração para Agentes de IA.
+O painel visual do MLflow está protegido pelo plugin corporativo de autenticação da Light:
+
+- **URL Oficial**: `https://mlflow-tracking-server-504082412074.us-central1.run.app`
+- **Usuário**: `light`
+- **Senha**: `Light@2026`
+
+> Ao acessar a URL acima pelo navegador, o pop-up nativo de autenticação solicitará as credenciais corporativas acima.
 
 ---
 
-## 🔐 Autenticação & Variáveis de Ambiente
+## 🏗️ Estrutura do Repositório
 
-Para conectar qualquer aplicação ou notebook ao MLflow da Light, defina as variáveis de ambiente:
+- `infrastructure/`: Configurações Terraform para provisionar Cloud SQL (PostgreSQL), Cloud Storage (GCS), Cloud Run, VPC Peering, IAM e Secret Manager.
+- `server/`: Container Docker do MLflow Tracking Server com o plugin nativo de autenticação ASGI/FastAPI (`light-auth`).
+- `sdk/`: Pacote Python `light-mlflow` com decoradores (`@track_pipeline`, `@llm_span`, `@tool_span`, `@retriever_span`, `@agent_span`), cálculo de tokens/custos e fail-safe.
+- `sdk-node/`: Pacote Node.js/TypeScript `light-mlflow-node` para backends JavaScript (Express, NestJS, etc.).
+- `scripts/`: Pipeline ETL de extração otimizada do PostgreSQL para Parquet no GCS (integrado ao Databricks / Unity Catalog).
+- `examples/`: Exemplos práticos de uso do SDK para ML e GenAI.
+- `docs/`: Manuais completos de setup, arquitetura e instruções para Agentes de IA.
+
+---
+
+## 🔐 Autenticação para Aplicações e Agentes de IA
+
+Para conectar qualquer aplicação, notebook ou Agente de IA ao MLflow da Light, configure as variáveis de ambiente:
 
 | Variável | Descrição | Exemplo |
 |---|---|---|
 | `MLFLOW_TRACKING_URI` | URL oficial do Tracking Server | `https://mlflow-tracking-server-504082412074.us-central1.run.app` |
 | `MLFLOW_TRACKING_TOKEN` | Token corporativo de autenticação | Recuperado do GCP Secret Manager (`mlflow-api-token`) |
 
-> 🛡️ **Arquitetura Fail-Safe**: Caso o token não seja fornecido ou o servidor de tracking esteja inacessível, as aplicações e Agentes de IA **continuam funcionando normalmente**. A telemetria nunca interrompe a resposta ao usuário final.
+> 🛡️ **Arquitetura Dual-Auth & Fail-Safe**:
+> - **Agentes de IA e Pipelines**: Utilizam autenticação via Bearer Token (ou Service Account do Cloud Run), passando direto pela API sem bloqueio humano.
+> - **Humanos no Navegador**: Acessam a Área Light via Basic Auth (`light` / `Light@2026`).
+> - **Resiliência**: Caso o servidor de tracking esteja temporariamente indisponível, as aplicações e Agentes **continuam respondendo normalmente**, sem interrupção de serviço.
 
 ---
 
-## 📦 Instalação Rápida
+## 📦 Instalação Rápida dos SDKs
 
 ### Python
 ```bash

@@ -28,17 +28,27 @@ O sistema atende a dois cenários principais da Light:
 1. **Modelos de ML tradicionais** — treinamento, avaliação, versionamento de modelos (Scikit-Learn, XGBoost, etc.)
 2. **Softwares com Foundation Models (GenAI)** — tracking de chamadas a LLMs (Gemini, Vertex AI, OpenAI, Claude), prompts, tokens, latência, custos e árvore hierárquica de Spans (RAGs e Agentes Autônomos).
 
+## 🌐 Acesso à Interface Web (Área Light)
+
+O painel visual do MLflow está protegido pelo plugin corporativo de autenticação da Light:
+
+- **URL Oficial**: `https://mlflow-tracking-server-504082412074.us-central1.run.app`
+- **Usuário**: `light`
+- **Senha**: `Light@2026`
+
+> Ao acessar a URL acima pelo navegador, o pop-up nativo de autenticação solicitará as credenciais corporativas acima.
+
 ---
 
 ## 🏗️ Estrutura do Repositório
 
-- `infrastructure/`: Configurações Terraform para provisionar Cloud SQL, Cloud Storage, Cloud Run, VPC, IAM e Secret Manager.
-- `server/`: Container Docker customizado para rodar o MLflow Tracking Server conectado aos serviços GCP.
-- `sdk/`: Pacote Python `light-mlflow` contendo decoradores (`@track_pipeline`, `@llm_span`, `@tool_span`), cálculo automático de tokens/custos e resiliência fail-safe.
+- `infrastructure/`: Configurações Terraform para provisionar Cloud SQL (PostgreSQL), Cloud Storage (GCS), Cloud Run, VPC Peering, IAM e Secret Manager.
+- `server/`: Container Docker do MLflow Tracking Server com o plugin nativo de autenticação ASGI/FastAPI (`light-auth`).
+- `sdk/`: Pacote Python `light-mlflow` com decoradores (`@track_pipeline`, `@llm_span`, `@tool_span`, `@retriever_span`, `@agent_span`), cálculo de tokens/custos e fail-safe.
 - `sdk-node/`: Pacote Node.js/TypeScript `light-mlflow-node` para backends JavaScript (Express, NestJS, etc.).
 - `scripts/`: Pipeline ETL de extração otimizada do PostgreSQL para Parquet no GCS (integrado ao Databricks / Unity Catalog).
 - `examples/`: Exemplos práticos de uso do SDK para ML e GenAI.
-- `docs/`: Guias detalhados de setup, arquitetura e integração para Agentes de IA.
+- `docs/`: Manuais completos de setup, arquitetura e instruções para Agentes de IA.
 
 ---
 

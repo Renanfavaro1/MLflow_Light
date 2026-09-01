@@ -1,24 +1,34 @@
-# Guia de Setup - MLflow Light
+# Guia de Setup & Acesso - MLflow Light
 
-## 1. Instalando o SDK
+---
 
-Para usar as funções do MLflow nos seus códigos locais, aplicações ou notebooks (Jupyter/Colab):
+## 🌐 1. Acesso à Área Light (Interface Visual)
+
+Para acessar o painel de experimentos, métricas e traces no navegador:
+
+- **URL**: `https://mlflow-tracking-server-504082412074.us-central1.run.app`
+- **Usuário**: `light`
+- **Senha**: `Light@2026`
+
+---
+
+## 📦 2. Instalando os SDKs da Light
 
 ### Python:
 ```bash
 pip install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk
 ```
 
-### Node.js:
+### Node.js / TypeScript:
 ```bash
 npm install git+https://github.com/Renanfavaro1/MLflow_Light.git#subdirectory=sdk-node
 ```
 
 ---
 
-## 2. Configurando as Variáveis de Ambiente
+## ⚙️ 3. Configurando as Variáveis de Ambiente
 
-Para enviar métricas e traces para o servidor oficial da Light, configure a URI e o Token corporativo:
+Para conectar suas aplicações ao servidor oficial:
 
 ### Linux / macOS:
 ```bash
@@ -32,10 +42,28 @@ $env:MLFLOW_TRACKING_URI="https://mlflow-tracking-server-504082412074.us-central
 $env:MLFLOW_TRACKING_TOKEN="28684e077978582afa70be269dbdac57544aae36fb051fa3dc049f2e1c7defd0"
 ```
 
-### Docker / Arquivo `.env`:
+### Arquivo `.env` ou Docker Compose:
 ```env
 MLFLOW_TRACKING_URI=https://mlflow-tracking-server-504082412074.us-central1.run.app
 MLFLOW_TRACKING_TOKEN=28684e077978582afa70be269dbdac57544aae36fb051fa3dc049f2e1c7defd0
 ```
 
-> 💡 **Nota de Segurança**: No GCP Cloud Run, o token pode ser injetado automaticamente via Secret Manager referenciando o secret `mlflow-api-token`.
+---
+
+## 🚀 4. Build e Deploy do Servidor (Infraestrutura)
+
+Caso necessite atualizar a imagem ou re-implantar a infraestrutura no GCP:
+
+```bash
+# 1. No Cloud Shell, clone ou atualize o repositório
+cd ~/MLflow_Light
+git pull origin main
+
+# 2. Build da imagem com o plugin light-auth
+gcloud builds submit ./server --tag us-central1-docker.pkg.dev/light-energia-dev-a39122fa/mlflow-repo/mlflow:latest
+
+# 3. Deploy no Cloud Run
+gcloud run deploy mlflow-tracking-server \
+  --image us-central1-docker.pkg.dev/light-energia-dev-a39122fa/mlflow-repo/mlflow:latest \
+  --region us-central1
+```

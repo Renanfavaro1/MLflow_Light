@@ -5,6 +5,13 @@ Este guia serve como a principal base de conhecimento para o Antigravity (e dese
 
 ---
 
+## 🌐 Acesso ao Painel Visual (Área Light)
+- **URL**: `https://mlflow-tracking-server-504082412074.us-central1.run.app`
+- **Usuário**: `light`
+- **Senha**: `Light@2026`
+
+---
+
 ## 📦 1. Dependência e Instalação
 
 Ao criar ou atualizar um projeto Python, adicione o pacote ao `requirements.txt`:
