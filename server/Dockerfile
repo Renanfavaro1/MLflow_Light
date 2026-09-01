@@ -5,6 +5,8 @@ RUN pip install --no-cache-dir -r /requirements.txt
 
 # Copy and setup entrypoint script
 COPY entrypoint.sh /entrypoint.sh
+COPY auth_proxy.py /auth_proxy.py
+ENV PYTHONPATH="/"
 RUN chmod +x /entrypoint.sh
 
 # Expose MLflow port

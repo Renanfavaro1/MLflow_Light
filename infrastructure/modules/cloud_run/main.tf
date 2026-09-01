@@ -49,6 +49,16 @@ resource "google_cloud_run_v2_service" "mlflow_server" {
         value = "*"
       }
 
+      # Credenciais do Micro-Proxy (Acesso Web)
+      env {
+        name  = "BASIC_AUTH_USER"
+        value = "light"
+      }
+      env {
+        name  = "BASIC_AUTH_PASS"
+        value = "Light@2026"
+      }
+
       ports {
         container_port = 5000
       }
