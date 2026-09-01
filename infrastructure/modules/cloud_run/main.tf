@@ -66,7 +66,7 @@ resource "google_cloud_run_v2_service" "mlflow_server" {
       resources {
         limits = {
           cpu    = "2"
-          memory = "2Gi"
+          memory = "4Gi"
         }
       }
     }
