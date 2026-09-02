@@ -1,12 +1,12 @@
 """
-ETL: MLflow PostgreSQL -> GCS Parquet (com Traces & Spans)
-==========================================================
+ETL: MLflow PostgreSQL -> GCS Parquet (com Traces, Spans e Assessments)
+======================================================================
 Exporta todas as tabelas públicas do banco PostgreSQL do MLflow (incluindo
 as tabelas de Traces de IA e Assessments do LLM Judge) para arquivos Parquet no GCS.
 
-Gera também uma tabela consolidada de Traces de IA ('traces_consolidated.parquet')
-unindo trace_info, experiments, trace_tags e trace_request_metadata com
-cálculo dinâmico de custo em Reais (BRL).
+Garante escape de palavras reservadas no SQL ("key", "value", "user", etc.)
+e gera a tabela consolidada de Traces de IA ('traces_consolidated.parquet')
+com cálculo dinâmico de custo em Reais (BRL).
 """
 
 import os
@@ -45,7 +45,7 @@ MAX_TEXT_LEN = 10_000
 HEAVY_TABLES = {"spans", "inputs", "assessments"}
 
 # Batch sizes otimizados
-BATCH_HEAVY = 500    # 500 linhas por batch para tabelas com payloads maiores
+BATCH_HEAVY = 500    # 500 linhas por batch para tabelas pesadas
 BATCH_NORMAL = 10000 # 10.000 linhas por batch para tabelas normais
 
 
@@ -99,27 +99,29 @@ def get_all_columns(conn, table_name):
 
 def build_select_query(conn, table_name, truncate_text=False):
     """
-    Constrói a query SELECT. Trunca textos pesados se solicitado.
+    Constrói a query SELECT escapando identificadores com aspas duplas ("key", "value", etc.).
+    Trunca textos pesados se solicitado.
     """
     all_cols = get_all_columns(conn, table_name)
     if not truncate_text:
-        return f"SELECT * FROM {table_name}", all_cols
+        quoted_cols = [f'"{col}"' for col in all_cols]
+        return f'SELECT {", ".join(quoted_cols)} FROM "{table_name}"', all_cols
 
     text_cols = get_text_columns(conn, table_name)
     projections = []
     for col in all_cols:
         if col in text_cols:
-            projections.append(f"LEFT({col}::text, {MAX_TEXT_LEN}) AS {col}")
+            projections.append(f'LEFT("{col}"::text, {MAX_TEXT_LEN}) AS "{col}"')
         else:
-            projections.append(col)
+            projections.append(f'"{col}"')
 
-    return f"SELECT {', '.join(projections)} FROM {table_name}", all_cols
+    return f'SELECT {", ".join(projections)} FROM "{table_name}"', all_cols
 
 
 def get_row_count(conn, table_name):
-    """Conta registros na tabela."""
+    """Conta registros na tabela de forma segura contra palavras reservadas."""
     with conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+        cur.execute(f'SELECT COUNT(*) FROM "{table_name}"')
         return cur.fetchone()[0]
 
 
@@ -148,8 +150,8 @@ def rows_to_pydict_list(columns, rows):
 def export_table(conn, table_name, bucket_name, prefix):
     """
     Exporta uma tabela para Parquet no GCS.
-    Suporta tabelas grandes com cursores server-side e garante que tabelas vazias
-    gerem arquivo Parquet com schema para o Unity Catalog.
+    Escapa palavras reservadas do PostgreSQL ("key", "value", etc.) e garante
+    que tabelas vazias gerem arquivo Parquet estruturado para o Databricks Unity Catalog.
     """
     is_heavy = table_name in HEAVY_TABLES
     batch_size = BATCH_HEAVY if is_heavy else BATCH_NORMAL
@@ -158,34 +160,34 @@ def export_table(conn, table_name, bucket_name, prefix):
     if os.path.exists(temp_file):
         os.remove(temp_file)
 
-    total = get_row_count(conn, table_name)
-    select_sql, columns = build_select_query(conn, table_name, truncate_text=is_heavy)
-
-    # Caso 1: Tabela vazia -> Gera Parquet estruturado (0 linhas) para o Databricks
-    if total == 0:
-        logger.info(f"  {table_name}: vazia (0 registros). Gerando Parquet estruturado para Unity Catalog...")
-        empty_data = {col: pa.array([], type=pa.string()) for col in columns}
-        empty_table = pa.Table.from_pydict(empty_data)
-        pq.write_table(empty_table, temp_file, compression="snappy")
-        
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(f"{prefix}/{table_name}.parquet")
-        blob.upload_from_filename(temp_file)
-        
-        if table_name == "latest_metrics":
-            bucket.blob(f"{prefix}/metrics_latest.parquet").upload_from_filename(temp_file)
-            
-        logger.info(f"  ✅ {table_name}: Parquet (schema vazio) exportado com sucesso.")
-        return True
-
-    logger.info(f"  {table_name}: {total} registros (batch={batch_size}, heavy={is_heavy})")
-
-    writer = None
-    schema = None
-    total_rows = 0
-
     try:
+        total = get_row_count(conn, table_name)
+        select_sql, columns = build_select_query(conn, table_name, truncate_text=is_heavy)
+
+        # Caso 1: Tabela vazia -> Gera Parquet estruturado (0 linhas) para o Databricks
+        if total == 0:
+            logger.info(f"  {table_name}: vazia (0 registros). Gerando Parquet estruturado para Unity Catalog...")
+            empty_data = {col: pa.array([], type=pa.string()) for col in columns}
+            empty_table = pa.Table.from_pydict(empty_data)
+            pq.write_table(empty_table, temp_file, compression="snappy")
+            
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(f"{prefix}/{table_name}.parquet")
+            blob.upload_from_filename(temp_file)
+            
+            if table_name == "latest_metrics":
+                bucket.blob(f"{prefix}/metrics_latest.parquet").upload_from_filename(temp_file)
+                
+            logger.info(f"  ✅ {table_name}: Parquet (schema vazio) exportado com sucesso.")
+            return True
+
+        logger.info(f"  {table_name}: {total} registros (batch={batch_size}, heavy={is_heavy})")
+
+        writer = None
+        schema = None
+        total_rows = 0
+
         cursor_name = f"etl_{table_name}_{uuid.uuid4().hex[:8]}"
         with conn.cursor(name=cursor_name) as cur:
             cur.itersize = batch_size
@@ -201,7 +203,6 @@ def export_table(conn, table_name, bucket_name, prefix):
 
                 # Inicializa o writer com o schema do primeiro batch
                 if writer is None:
-                    # Converte campos de tipo null para string para evitar erros de schema
                     fields = []
                     for field in arrow_table.schema:
                         if field.type == pa.null():
@@ -211,7 +212,6 @@ def export_table(conn, table_name, bucket_name, prefix):
                     schema = pa.schema(fields)
                     writer = pq.ParquetWriter(temp_file, schema, compression="snappy")
 
-                # Escreve a tabela castada para o schema fixo
                 try:
                     cast_table = arrow_table.cast(schema, safe=False)
                     writer.write_table(cast_table)
@@ -246,11 +246,6 @@ def export_table(conn, table_name, bucket_name, prefix):
         return False
 
     finally:
-        if writer:
-            try:
-                writer.close()
-            except Exception:
-                pass
         if os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
@@ -283,38 +278,38 @@ def export_consolidated_traces(conn, bucket_name, prefix, cotacao_dolar=5.75):
         t.request_id AS trace_id,
         t.experiment_id,
         COALESCE(e.name, 'Sem Experimento') AS experiment_name,
-        COALESCE(tag_service.value, e.name, 'Agente Desconhecido') AS service_name,
+        COALESCE(tag_service."value", e.name, 'Agente Desconhecido') AS service_name,
         TO_TIMESTAMP(t.timestamp_ms / 1000.0) AS data_hora_atendimento,
         (t.execution_time_ms / 1000.0) AS latencia_segundos,
         t.status,
         
         -- Contagem de Tokens
-        COALESCE(CAST(NULLIF(meta_prompt.value, '') AS INTEGER), 0) AS prompt_tokens,
-        COALESCE(CAST(NULLIF(meta_comp.value, '') AS INTEGER), 0) AS completion_tokens,
-        COALESCE(CAST(NULLIF(meta_total.value, '') AS INTEGER), 0) AS total_tokens,
+        COALESCE(CAST(NULLIF(meta_prompt."value", '') AS INTEGER), 0) AS prompt_tokens,
+        COALESCE(CAST(NULLIF(meta_comp."value", '') AS INTEGER), 0) AS completion_tokens,
+        COALESCE(CAST(NULLIF(meta_total."value", '') AS INTEGER), 0) AS total_tokens,
         
         -- Custos
-        COALESCE(CAST(NULLIF(meta_cost.value, '') AS NUMERIC(10, 6)), 0.0) AS custo_usd,
-        ROUND(COALESCE(CAST(NULLIF(meta_cost.value, '') AS NUMERIC(10, 6)), 0.0) * {cotacao_dolar}, 4) AS custo_brl
+        COALESCE(CAST(NULLIF(meta_cost."value", '') AS NUMERIC(10, 6)), 0.0) AS custo_usd,
+        ROUND(COALESCE(CAST(NULLIF(meta_cost."value", '') AS NUMERIC(10, 6)), 0.0) * {cotacao_dolar}, 4) AS custo_brl
 
-    FROM trace_info t
-    LEFT JOIN experiments e 
+    FROM "trace_info" t
+    LEFT JOIN "experiments" e 
         ON t.experiment_id = CAST(e.experiment_id AS VARCHAR)
-    LEFT JOIN trace_tags tag_service 
+    LEFT JOIN "trace_tags" tag_service 
         ON t.request_id = tag_service.request_id 
-        AND tag_service.key = 'service.name'
-    LEFT JOIN trace_request_metadata meta_prompt 
+        AND tag_service."key" = 'service.name'
+    LEFT JOIN "trace_request_metadata" meta_prompt 
         ON t.request_id = meta_prompt.request_id 
-        AND meta_prompt.key = 'mlflow.trace.prompt_tokens'
-    LEFT JOIN trace_request_metadata meta_comp 
+        AND meta_prompt."key" = 'mlflow.trace.prompt_tokens'
+    LEFT JOIN "trace_request_metadata" meta_comp 
         ON t.request_id = meta_comp.request_id 
-        AND meta_comp.key = 'mlflow.trace.completion_tokens'
-    LEFT JOIN trace_request_metadata meta_total 
+        AND meta_comp."key" = 'mlflow.trace.completion_tokens'
+    LEFT JOIN "trace_request_metadata" meta_total 
         ON t.request_id = meta_total.request_id 
-        AND meta_total.key = 'mlflow.trace.total_tokens'
-    LEFT JOIN trace_request_metadata meta_cost 
+        AND meta_total."key" = 'mlflow.trace.total_tokens'
+    LEFT JOIN "trace_request_metadata" meta_cost 
         ON t.request_id = meta_cost.request_id 
-        AND meta_cost.key = 'mlflow.trace.cost'
+        AND meta_cost."key" = 'mlflow.trace.cost'
     ORDER BY t.timestamp_ms DESC;
     """
 
