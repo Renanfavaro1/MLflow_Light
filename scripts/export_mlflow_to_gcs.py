@@ -4,9 +4,8 @@ ETL: MLflow PostgreSQL -> GCS Parquet (com Traces, Spans e Assessments)
 Exporta todas as tabelas públicas do banco PostgreSQL do MLflow (incluindo
 as tabelas de Traces de IA e Assessments do LLM Judge) para arquivos Parquet no GCS.
 
-Garante escape de palavras reservadas no SQL ("key", "value", "user", etc.)
-e gera a tabela consolidada de Traces de IA ('traces_consolidated.parquet')
-com cálculo dinâmico de custo em Reais (BRL).
+Garante suporte a server-side cursors dentro de transações ativas e
+compatibilidade universal de tipos no JOIN de experimentos.
 """
 
 import os
@@ -50,10 +49,12 @@ BATCH_NORMAL = 10000 # 10.000 linhas por batch para tabelas normais
 
 
 def get_connection():
-    """Cria conexão direta com psycopg2 (sem SQLAlchemy)."""
+    """Cria conexão direta com psycopg2 com autocommit desativado para permitir named cursors."""
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL não definida.")
-    return psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False  # Obrigatório para server-side named cursors no psycopg2
+    return conn
 
 
 def get_public_tables(conn):
@@ -150,8 +151,7 @@ def rows_to_pydict_list(columns, rows):
 def export_table(conn, table_name, bucket_name, prefix):
     """
     Exporta uma tabela para Parquet no GCS.
-    Escapa palavras reservadas do PostgreSQL ("key", "value", etc.) e garante
-    que tabelas vazias gerem arquivo Parquet estruturado para o Databricks Unity Catalog.
+    Usa transação ativa para named cursors no psycopg2.
     """
     is_heavy = table_name in HEAVY_TABLES
     batch_size = BATCH_HEAVY if is_heavy else BATCH_NORMAL
@@ -188,42 +188,44 @@ def export_table(conn, table_name, bucket_name, prefix):
         schema = None
         total_rows = 0
 
-        cursor_name = f"etl_{table_name}_{uuid.uuid4().hex[:8]}"
-        with conn.cursor(name=cursor_name) as cur:
-            cur.itersize = batch_size
-            cur.execute(select_sql)
+        # Transação ativa obrigatória para cursor nomeado no PostgreSQL
+        with conn:
+            cursor_name = f"etl_{table_name}_{uuid.uuid4().hex[:8]}"
+            with conn.cursor(name=cursor_name) as cur:
+                cur.itersize = batch_size
+                cur.execute(select_sql)
 
-            while True:
-                rows = cur.fetchmany(batch_size)
-                if not rows:
-                    break
+                while True:
+                    rows = cur.fetchmany(batch_size)
+                    if not rows:
+                        break
 
-                pydict_rows = rows_to_pydict_list(columns, rows)
-                arrow_table = pa.Table.from_pylist(pydict_rows)
+                    pydict_rows = rows_to_pydict_list(columns, rows)
+                    arrow_table = pa.Table.from_pylist(pydict_rows)
 
-                # Inicializa o writer com o schema do primeiro batch
-                if writer is None:
-                    fields = []
-                    for field in arrow_table.schema:
-                        if field.type == pa.null():
-                            fields.append(pa.field(field.name, pa.string()))
-                        else:
-                            fields.append(field)
-                    schema = pa.schema(fields)
-                    writer = pq.ParquetWriter(temp_file, schema, compression="snappy")
+                    # Inicializa o writer com o schema do primeiro batch
+                    if writer is None:
+                        fields = []
+                        for field in arrow_table.schema:
+                            if field.type == pa.null():
+                                fields.append(pa.field(field.name, pa.string()))
+                            else:
+                                fields.append(field)
+                        schema = pa.schema(fields)
+                        writer = pq.ParquetWriter(temp_file, schema, compression="snappy")
 
-                try:
-                    cast_table = arrow_table.cast(schema, safe=False)
-                    writer.write_table(cast_table)
-                except Exception:
-                    writer.write_table(arrow_table)
+                    try:
+                        cast_table = arrow_table.cast(schema, safe=False)
+                        writer.write_table(cast_table)
+                    except Exception:
+                        writer.write_table(arrow_table)
 
-                total_rows += len(rows)
-                if total_rows % 10000 < batch_size or total_rows <= batch_size:
-                    logger.info(f"    {table_name}: {total_rows}/{total} linhas processadas...")
+                    total_rows += len(rows)
+                    if total_rows % 10000 < batch_size or total_rows <= batch_size:
+                        logger.info(f"    {table_name}: {total_rows}/{total} linhas processadas...")
 
-                del rows, pydict_rows, arrow_table
-                gc.collect()
+                    del rows, pydict_rows, arrow_table
+                    gc.collect()
 
         if writer:
             writer.close()
@@ -273,6 +275,7 @@ def export_consolidated_traces(conn, bucket_name, prefix, cotacao_dolar=5.75):
     if os.path.exists(temp_file):
         os.remove(temp_file)
 
+    # Cast mútuo para VARCHAR no JOIN evita erro de tipo 'integer = character varying'
     query = f"""
     SELECT 
         t.request_id AS trace_id,
@@ -294,7 +297,7 @@ def export_consolidated_traces(conn, bucket_name, prefix, cotacao_dolar=5.75):
 
     FROM "trace_info" t
     LEFT JOIN "experiments" e 
-        ON t.experiment_id = CAST(e.experiment_id AS VARCHAR)
+        ON CAST(t.experiment_id AS VARCHAR) = CAST(e.experiment_id AS VARCHAR)
     LEFT JOIN "trace_tags" tag_service 
         ON t.request_id = tag_service.request_id 
         AND tag_service."key" = 'service.name'
@@ -314,10 +317,11 @@ def export_consolidated_traces(conn, bucket_name, prefix, cotacao_dolar=5.75):
     """
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(query)
-            columns = [desc[0] for desc in cur.description]
-            rows = cur.fetchall()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                columns = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
 
         if rows:
             logger.info(f"  Consolidados {len(rows)} traces com sucesso.")
@@ -357,7 +361,6 @@ def main():
     logger.info("=" * 70)
 
     conn = get_connection()
-    conn.set_session(readonly=True, autocommit=True)
 
     try:
         tables = get_public_tables(conn)
