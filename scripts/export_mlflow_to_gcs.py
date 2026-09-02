@@ -1,14 +1,12 @@
 """
-ETL: MLflow PostgreSQL -> GCS Parquet
-=====================================
-Exporta todas as tabelas públicas do banco PostgreSQL do MLflow para
-arquivos Parquet no Google Cloud Storage, além de gerar uma tabela
-consolidada de Traces de IA para consumo direto pelo Databricks / Unity Catalog.
+ETL: MLflow PostgreSQL -> GCS Parquet (com Traces & Spans)
+==========================================================
+Exporta todas as tabelas públicas do banco PostgreSQL do MLflow (incluindo
+as tabelas de Traces de IA e Assessments do LLM Judge) para arquivos Parquet no GCS.
 
-A tabela 'spans' contém textos gigantescos (prompts, respostas de IA,
-PDFs codificados). Para evitar Out-of-Memory no Cloud Run (4GB RAM),
-a truncagem de texto é feita DENTRO DO SQL (LEFT), antes que o dado
-chegue ao driver psycopg2 em Python.
+Gera também uma tabela consolidada de Traces de IA ('traces_consolidated.parquet')
+unindo trace_info, experiments, trace_tags e trace_request_metadata com
+cálculo dinâmico de custo em Reais (BRL).
 """
 
 import os
@@ -40,15 +38,15 @@ GCS_PREFIX = "mlflow_export/latest"
 # Cotação do dólar para conversão dinâmica USD -> BRL
 COTACAO_DOLAR = float(os.environ.get("COTACAO_DOLAR", "5.75"))
 
-# Limite de caracteres para colunas de texto no SQL (10 KB por célula)
+# Limite de caracteres para colunas de texto pesado (10 KB por célula)
 MAX_TEXT_LEN = 10_000
 
-# Tabelas pesadas que precisam de tratamento especial (textos gigantes)
-HEAVY_TABLES = {"spans", "inputs", "trace_info"}
+# Tabelas com payloads textuais grandes que recebem truncagem segura no SQL
+HEAVY_TABLES = {"spans", "inputs", "assessments"}
 
-# Batch sizes
-BATCH_HEAVY = 100   # 100 linhas por vez para tabelas com payloads enormes
-BATCH_NORMAL = 5000 # 5000 linhas por vez para tabelas leves
+# Batch sizes otimizados
+BATCH_HEAVY = 500    # 500 linhas por batch para tabelas com payloads maiores
+BATCH_NORMAL = 10000 # 10.000 linhas por batch para tabelas normais
 
 
 def get_connection():
@@ -59,7 +57,7 @@ def get_connection():
 
 
 def get_public_tables(conn):
-    """Lista todas as tabelas do schema public (exceto alembic)."""
+    """Lista todas as tabelas do schema public (exceto alembic_version)."""
     with conn.cursor() as cur:
         cur.execute("""
             SELECT table_name
@@ -73,7 +71,7 @@ def get_public_tables(conn):
 
 
 def get_text_columns(conn, table_name):
-    """Identifica colunas de tipo texto/bytea na tabela (candidatas a truncagem)."""
+    """Identifica colunas de tipo texto/bytea/json na tabela."""
     with conn.cursor() as cur:
         cur.execute("""
             SELECT column_name, data_type
@@ -101,9 +99,7 @@ def get_all_columns(conn, table_name):
 
 def build_select_query(conn, table_name, truncate_text=False):
     """
-    Constrói a query SELECT. Se truncate_text=True, envolve colunas
-    de texto com LEFT(col::text, MAX_TEXT_LEN) diretamente no SQL.
-    Isso garante que o driver psycopg2 NUNCA receba strings gigantes.
+    Constrói a query SELECT. Trunca textos pesados se solicitado.
     """
     all_cols = get_all_columns(conn, table_name)
     if not truncate_text:
@@ -113,7 +109,6 @@ def build_select_query(conn, table_name, truncate_text=False):
     projections = []
     for col in all_cols:
         if col in text_cols:
-            # Trunca no banco: o dado já chega cortado ao Python
             projections.append(f"LEFT({col}::text, {MAX_TEXT_LEN}) AS {col}")
         else:
             projections.append(col)
@@ -128,57 +123,33 @@ def get_row_count(conn, table_name):
         return cur.fetchone()[0]
 
 
-def make_arrow_schema(columns, sample_rows):
-    """
-    Cria um schema PyArrow a partir de uma amostra de dados.
-    Força colunas totalmente nulas para pa.string() para evitar pa.null().
-    """
-    col_data = {col: [] for col in columns}
-    for row in sample_rows:
-        for i, col in enumerate(columns):
-            val = row[i]
-            if isinstance(val, (dict, list)):
-                val = json.dumps(val, ensure_ascii=False)
-            elif isinstance(val, bytes):
-                val = val.decode("utf-8", errors="replace")
-            elif isinstance(val, memoryview):
-                val = bytes(val).decode("utf-8", errors="replace")
-            col_data[col].append(val)
-
-    table = pa.table(col_data)
-    fields = []
-    for field in table.schema:
-        if field.type == pa.null():
-            fields.append(pa.field(field.name, pa.string()))
-        else:
-            fields.append(field)
-    return pa.schema(fields)
+def sanitize_value(val):
+    """Converte tipos especiais (dict, list, memoryview, bytes) em tipos serializáveis."""
+    if val is None:
+        return None
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, ensure_ascii=False)
+    if isinstance(val, (bytes, memoryview)):
+        return bytes(val).decode("utf-8", errors="replace")
+    return val
 
 
-def rows_to_arrow_table(columns, rows, schema):
-    """Converte lista de tuplas (rows) em pa.Table alinhada ao schema."""
-    col_data = {col: [] for col in columns}
+def rows_to_pydict_list(columns, rows):
+    """Converte tuplas do psycopg2 em lista de dicionários higienizados."""
+    dict_rows = []
     for row in rows:
-        for i, col in enumerate(columns):
-            val = row[i]
-            if isinstance(val, (dict, list)):
-                val = json.dumps(val, ensure_ascii=False)
-            elif isinstance(val, bytes):
-                val = bytes(val).decode("utf-8", errors="replace")
-            elif isinstance(val, memoryview):
-                val = bytes(val).decode("utf-8", errors="replace")
-            col_data[col].append(val)
-
-    table = pa.table(col_data)
-    try:
-        return table.cast(schema, safe=False)
-    except Exception:
-        return table
+        row_dict = {}
+        for col, val in zip(columns, row):
+            row_dict[col] = sanitize_value(val)
+        dict_rows.append(row_dict)
+    return dict_rows
 
 
 def export_table(conn, table_name, bucket_name, prefix):
     """
-    Exporta uma tabela individual para Parquet no GCS usando server-side cursor.
+    Exporta uma tabela para Parquet no GCS.
+    Suporta tabelas grandes com cursores server-side e garante que tabelas vazias
+    gerem arquivo Parquet com schema para o Unity Catalog.
     """
     is_heavy = table_name in HEAVY_TABLES
     batch_size = BATCH_HEAVY if is_heavy else BATCH_NORMAL
@@ -188,13 +159,27 @@ def export_table(conn, table_name, bucket_name, prefix):
         os.remove(temp_file)
 
     total = get_row_count(conn, table_name)
+    select_sql, columns = build_select_query(conn, table_name, truncate_text=is_heavy)
+
+    # Caso 1: Tabela vazia -> Gera Parquet estruturado (0 linhas) para o Databricks
     if total == 0:
-        logger.info(f"  {table_name}: vazia, pulando.")
-        return False
+        logger.info(f"  {table_name}: vazia (0 registros). Gerando Parquet estruturado para Unity Catalog...")
+        empty_data = {col: pa.array([], type=pa.string()) for col in columns}
+        empty_table = pa.Table.from_pydict(empty_data)
+        pq.write_table(empty_table, temp_file, compression="snappy")
+        
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(f"{prefix}/{table_name}.parquet")
+        blob.upload_from_filename(temp_file)
+        
+        if table_name == "latest_metrics":
+            bucket.blob(f"{prefix}/metrics_latest.parquet").upload_from_filename(temp_file)
+            
+        logger.info(f"  ✅ {table_name}: Parquet (schema vazio) exportado com sucesso.")
+        return True
 
     logger.info(f"  {table_name}: {total} registros (batch={batch_size}, heavy={is_heavy})")
-
-    select_sql, columns = build_select_query(conn, table_name, truncate_text=is_heavy)
 
     writer = None
     schema = None
@@ -211,18 +196,33 @@ def export_table(conn, table_name, bucket_name, prefix):
                 if not rows:
                     break
 
-                if schema is None:
-                    schema = make_arrow_schema(columns, rows)
+                pydict_rows = rows_to_pydict_list(columns, rows)
+                arrow_table = pa.Table.from_pylist(pydict_rows)
+
+                # Inicializa o writer com o schema do primeiro batch
+                if writer is None:
+                    # Converte campos de tipo null para string para evitar erros de schema
+                    fields = []
+                    for field in arrow_table.schema:
+                        if field.type == pa.null():
+                            fields.append(pa.field(field.name, pa.string()))
+                        else:
+                            fields.append(field)
+                    schema = pa.schema(fields)
                     writer = pq.ParquetWriter(temp_file, schema, compression="snappy")
 
-                arrow_table = rows_to_arrow_table(columns, rows, schema)
-                writer.write_table(arrow_table)
+                # Escreve a tabela castada para o schema fixo
+                try:
+                    cast_table = arrow_table.cast(schema, safe=False)
+                    writer.write_table(cast_table)
+                except Exception:
+                    writer.write_table(arrow_table)
+
                 total_rows += len(rows)
+                if total_rows % 10000 < batch_size or total_rows <= batch_size:
+                    logger.info(f"    {table_name}: {total_rows}/{total} linhas processadas...")
 
-                if total_rows % 2500 < batch_size or total_rows <= batch_size:
-                    logger.info(f"    {table_name}: {total_rows}/{total} linhas...")
-
-                del rows, arrow_table
+                del rows, pydict_rows, arrow_table
                 gc.collect()
 
         if writer:
@@ -268,6 +268,16 @@ def export_consolidated_traces(conn, bucket_name, prefix, cotacao_dolar=5.75):
     logger.info("=" * 70)
     logger.info(f"Gerando visualização consolidada de Traces (Cotação Dólar: R$ {cotacao_dolar:.2f})...")
     
+    cols = [
+        "trace_id", "experiment_id", "experiment_name", "service_name",
+        "data_hora_atendimento", "latencia_segundos", "status",
+        "prompt_tokens", "completion_tokens", "total_tokens",
+        "custo_usd", "custo_brl"
+    ]
+    temp_file = "/tmp/traces_consolidated.parquet"
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+
     query = f"""
     SELECT 
         t.request_id AS trace_id,
@@ -308,24 +318,22 @@ def export_consolidated_traces(conn, bucket_name, prefix, cotacao_dolar=5.75):
     ORDER BY t.timestamp_ms DESC;
     """
 
-    temp_file = "/tmp/traces_consolidated.parquet"
-    if os.path.exists(temp_file):
-        os.remove(temp_file)
-
     try:
         with conn.cursor() as cur:
             cur.execute(query)
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
 
-        if not rows:
-            logger.info("  Nenhum trace encontrado para consolidar.")
-            return False
-
-        logger.info(f"  Consolidados {len(rows)} traces com sucesso.")
-        schema = make_arrow_schema(columns, rows)
-        arrow_table = rows_to_arrow_table(columns, rows, schema)
-        pq.write_table(arrow_table, temp_file, compression="snappy")
+        if rows:
+            logger.info(f"  Consolidados {len(rows)} traces com sucesso.")
+            pydict_rows = rows_to_pydict_list(columns, rows)
+            arrow_table = pa.Table.from_pylist(pydict_rows)
+            pq.write_table(arrow_table, temp_file, compression="snappy")
+        else:
+            logger.info("  0 traces encontrados. Gerando Parquet de traces com schema...")
+            empty_data = {col: pa.array([], type=pa.string()) for col in cols}
+            empty_table = pa.Table.from_pydict(empty_data)
+            pq.write_table(empty_table, temp_file, compression="snappy")
 
         # Upload no GCS
         client = storage.Client()
@@ -350,7 +358,7 @@ def export_consolidated_traces(conn, bucket_name, prefix, cotacao_dolar=5.75):
 
 def main():
     logger.info("=" * 70)
-    logger.info("ETL MLflow PostgreSQL -> GCS Parquet (com Traces & Spans)")
+    logger.info("ETL MLflow PostgreSQL -> GCS Parquet (com Traces, Spans e Assessments)")
     logger.info("=" * 70)
 
     conn = get_connection()
@@ -358,7 +366,7 @@ def main():
 
     try:
         tables = get_public_tables(conn)
-        logger.info(f"Encontradas {len(tables)} tabelas: {', '.join(tables)}")
+        logger.info(f"Encontradas {len(tables)} tabelas no banco: {', '.join(tables)}")
 
         # Processa tabelas pesadas PRIMEIRO (quando a RAM está mais limpa)
         heavy_first = sorted(tables, key=lambda t: (t not in HEAVY_TABLES, t))
