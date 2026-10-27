@@ -594,7 +594,7 @@ if __name__ == "__main__":
 import { LightMLflowConfig, trackPipeline, llmSpan } from '../sdk-node/src/index.js';
 
 // Simulando a variável de ambiente (geralmente injetada pelo Cloud Run)
-process.env.MLFLOW_TRACKING_URI = "https://mlflow-tracking-server-lvvvhziq5a-uc.a.run.app";
+process.env.MLFLOW_TRACKING_URI = "https://mlflow-tracking-server-504082412074.us-central1.run.app";
 
 // 1. Inicializa (deve ser feito apenas 1 vez na inicialização da aplicação)
 await LightMLflowConfig.setup("Light_Node_APIs");
@@ -671,7 +671,7 @@ if __name__ == "__main__":
 import { LightMLflowConfig, trackPipeline, llmSpan, toolSpan } from '../sdk-node/src/index.js';
 
 // Simulando a variável de ambiente (geralmente injetada pelo Cloud Run)
-process.env.MLFLOW_TRACKING_URI = "https://mlflow-tracking-server-lvvvhziq5a-uc.a.run.app";
+process.env.MLFLOW_TRACKING_URI = "https://mlflow-tracking-server-504082412074.us-central1.run.app";
 
 console.log("Iniciando Setup...");
 await LightMLflowConfig.setup("Light_Node_Traces_Test");

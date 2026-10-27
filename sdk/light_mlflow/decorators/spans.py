@@ -98,6 +98,10 @@ def _safe_serialize(obj):
         return str(obj)
 
 MODEL_PRICES = {
+    'claude-3.7-sonnet': {'input': 3.00, 'output': 15.00},
+    'claude-3-7-sonnet': {'input': 3.00, 'output': 15.00},
+    'claude-3.5-sonnet': {'input': 3.00, 'output': 15.00},
+    'claude-3-5-sonnet': {'input': 3.00, 'output': 15.00},
     'claude-opus-4.7': {'input': 4.82, 'output': 23.80},
     'claude-opus-4.6': {'input': 4.82, 'output': 23.80},
     'claude-sonnet-4.6': {'input': 2.80, 'output': 14.30},
@@ -163,8 +167,12 @@ def _extract_and_log_tokens(response, span=None):
         # Extração para SDK nativo da OpenAI (usage)
         elif hasattr(response, "usage") and response.usage is not None:
             usage = response.usage
-            p_tokens = getattr(usage, "prompt_tokens", 0)
-            c_tokens = getattr(usage, "completion_tokens", 0)
+            p_tokens = getattr(usage, "prompt_tokens", None)
+            if p_tokens is None:
+                p_tokens = getattr(usage, "input_tokens", 0)
+            c_tokens = getattr(usage, "completion_tokens", None)
+            if c_tokens is None:
+                c_tokens = getattr(usage, "output_tokens", 0)
             t_tokens = getattr(usage, "total_tokens", p_tokens + c_tokens)
             has_tokens = True
 

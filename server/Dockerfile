@@ -1,5 +1,8 @@
 FROM ghcr.io/mlflow/mlflow:latest
 
+# Atualiza pacotes do sistema com as correcoes de seguranca mais recentes (incluindo DSA-6582-1)
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
